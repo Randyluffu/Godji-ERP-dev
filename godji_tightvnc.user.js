@@ -1,242 +1,373 @@
 // ==UserScript==
-// @name         Годжи — TightVNC23232
+// @name         Годжи — TightVNC
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      3.3
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
+// @exclude      https://godji.cloud/tv/*
+// @exclude      https://*.godji.cloud/tv/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
+(function(){
+'use strict';
 
-(function() {
-    'use strict';
+var PROXY = 'http://localhost:6080';
 
-    setTimeout(init, 1500);
+// ── Карта комнат (как на ТВ-карте) ───────────────────────
+// Каждая комната — позиция и список ПК
+// x,y,w,h в % от размера всплывашки (400x520)
+var MAP_W = 400, MAP_H = 460;
+var ROOMS = [
+    // [name, x, y, w, h, [pcs...]]
+    ['Q',  270, 10,  120, 90,  ['10','11','12','13']],
+    ['W',  270, 108, 120, 90,  ['14','15','16','17']],
+    ['E',  270, 206, 120, 60,  ['08','09']],
+    ['R',  270, 274, 120, 50,  ['TV1']],
+    ['L',  10,  80,  130, 130, ['01','02','03','04','05']],
+    ['V',  148, 160, 110, 110, ['06','07','41']],
+    ['T',  270, 330, 120, 90,  ['18','19','20','21','22']],
+    ['Y',  148, 280, 110, 170, ['23','24','25','26','27','28','29']],
+    ['X',  10,  240, 130, 170, ['33','34','35','36','37','38','39','40']],
+    ['O',  148, 10,  110, 140, ['30','31','32']],
+];
 
-    const PROXY = 'http://localhost:6080';
+// ── Тост ─────────────────────────────────────────────────
+function toast(msg, ok){
+    var old = document.getElementById('gj-vnc-toast');
+    if(old) old.remove();
+    var t = document.createElement('div');
+    t.id = 'gj-vnc-toast';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999999;pointer-events:none;'
+        + 'background:var(--mantine-color-body,#1a1b2e);border:1px solid '+(ok?'rgba(74,222,128,.3)':'rgba(239,68,68,.3)')
+        + ';border-radius:8px;padding:10px 18px;font-size:13px;font-family:var(--mantine-font-family,inherit);'
+        + 'color:'+(ok?'#4ade80':'#f87171')+';display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,.4);';
+    t.innerHTML = (ok
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    ) + '<span>' + msg + '</span>';
+    document.body.appendChild(t);
+    setTimeout(function(){ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(function(){if(t.parentNode)t.remove();},300); }, 2500);
+}
 
-    function showToast(msg, ok) {
-        var old = document.getElementById('gj-vnc-toast');
-        if (old) old.remove();
-        var t = document.createElement('div');
-        t.id = 'gj-vnc-toast';
-        t.textContent = msg;
-        t.style.cssText =
-            'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
-            'padding:10px 20px;border-radius:10px;font-size:13px;font-family:sans-serif;' +
-            'z-index:9999999;pointer-events:none;transition:opacity .3s;' +
-            (ok
-                ? 'background:#0d1f14;color:#10b981;border:1px solid rgba(16,185,129,.3);'
-                : 'background:#1f0d0d;color:#ef4444;border:1px solid rgba(239,68,68,.3);');
-        document.body.appendChild(t);
-        setTimeout(function() {
-            t.style.opacity = '0';
-            setTimeout(function() { if (t.parentNode) t.remove(); }, 300);
-        }, 2500);
+// ── Всплывашка с картой ───────────────────────────────────
+var _popup = null;
+var _popupOpen = false;
+var _pcData = {};
+
+function togglePopup(anchor){
+    if(_popupOpen){ closePopup(); return; }
+    openPopup(anchor);
+}
+
+function openPopup(anchor){
+    closePopup();
+    _popupOpen = true;
+    updateSidebarBtn(true);
+
+    var popup = document.createElement('div');
+    _popup = popup;
+    popup.id = 'gj-vnc-popup';
+
+    // Позиционируем справа от сайдбара (280px) под кнопкой
+    var btnRect = anchor.getBoundingClientRect();
+    popup.style.cssText = [
+        'position:fixed',
+        'left:288px',
+        'top:'+(btnRect.top-10)+'px',
+        'width:'+MAP_W+'px',
+        'z-index:99990',
+        'background:var(--mantine-color-body,#1a1b2e)',
+        'border:1px solid rgba(255,255,255,0.1)',
+        'border-radius:12px',
+        'box-shadow:0 8px 32px rgba(0,0,0,.6)',
+        'font-family:var(--mantine-font-family,inherit)',
+        'overflow:hidden',
+        'display:flex',
+        'flex-direction:column',
+    ].join(';');
+
+    // Шапка
+    var hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 14px 10px;border-bottom:1px solid rgba(255,255,255,0.07);flex-shrink:0;';
+
+    var hdrL = document.createElement('div');
+    hdrL.style.cssText = 'display:flex;align-items:center;gap:8px;';
+    var hIco = document.createElement('div');
+    hIco.style.cssText = 'width:26px;height:26px;background:var(--mantine-color-gg_primary-filled,#cc0001);border-radius:6px;display:flex;align-items:center;justify-content:center;';
+    hIco.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+    var hTxt = document.createElement('span');
+    hTxt.style.cssText = 'font-size:13px;font-weight:700;color:var(--mantine-color-white,#e8eaf0);';
+    hTxt.textContent = 'Просмотр экрана';
+    hdrL.appendChild(hIco); hdrL.appendChild(hTxt);
+
+    var statusDot = document.createElement('span');
+    statusDot.id = 'gj-vnc-status-dot';
+    statusDot.style.cssText = 'font-size:11px;color:rgba(255,255,255,.3);';
+    statusDot.textContent = '●  проверка…';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.style.cssText = 'background:none;border:none;color:rgba(255,255,255,.35);cursor:pointer;font-size:18px;line-height:1;padding:0;';
+    closeBtn.textContent = '×';
+    closeBtn.onclick = closePopup;
+
+    hdr.appendChild(hdrL); hdr.appendChild(statusDot); hdr.appendChild(closeBtn);
+    popup.appendChild(hdr);
+
+    // Карта
+    var mapWrap = document.createElement('div');
+    mapWrap.style.cssText = 'position:relative;width:'+MAP_W+'px;height:'+MAP_H+'px;flex-shrink:0;';
+    mapWrap.id = 'gj-vnc-map';
+    popup.appendChild(mapWrap);
+
+    // Легенда
+    var legend = document.createElement('div');
+    legend.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 14px;border-top:1px solid rgba(255,255,255,.06);font-size:10px;color:rgba(255,255,255,.35);flex-shrink:0;';
+    legend.innerHTML = '<span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:3px;background:rgba(204,0,1,.35);border:1px solid rgba(204,0,1,.6);display:inline-block;"></span>Доступен</span>'
+        + '<span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:3px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);display:inline-block;"></span>Нет в конфиге</span>';
+    popup.appendChild(legend);
+
+    document.body.appendChild(popup);
+
+    // Подгоняем если выходит за низ экрана
+    var pRect = popup.getBoundingClientRect();
+    if(pRect.bottom > window.innerHeight - 10){
+        popup.style.top = Math.max(10, window.innerHeight - pRect.height - 10) + 'px';
     }
 
-    function loadList(listEl, statusEl) {
-        fetch(PROXY + '/status')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (statusEl) {
-                    statusEl.textContent = '\u2713 Сервер работает \u00B7 ПК: ' + Object.keys(data).length;
-                    statusEl.style.color = '#10b981';
-                }
+    // Закрытие по клику снаружи
+    setTimeout(function(){
+        document.addEventListener('click', outsideClose);
+    }, 0);
 
-                listEl.innerHTML = '';
-                var keys = Object.keys(data).sort(function(a, b) {
-                    return parseInt(a) - parseInt(b);
+    // Загружаем данные ПК
+    loadPCData(mapWrap, statusDot);
+}
+
+function outsideClose(e){
+    if(_popup && !_popup.contains(e.target)){
+        var btn = document.getElementById('gj-vnc-sidebar-btn');
+        if(btn && btn.contains(e.target)) return;
+        closePopup();
+    }
+}
+
+function closePopup(){
+    if(_popup){ _popup.remove(); _popup = null; }
+    _popupOpen = false;
+    updateSidebarBtn(false);
+    document.removeEventListener('click', outsideClose);
+}
+
+function loadPCData(mapWrap, statusDot){
+    fetch(PROXY + '/status')
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            _pcData = data;
+            var cnt = Object.keys(data).length;
+            statusDot.innerHTML = '<span style="color:#4ade80;">●</span> <span style="color:rgba(255,255,255,.4);">'+cnt+' ПК</span>';
+            renderMap(mapWrap, data);
+        })
+        .catch(function(){
+            statusDot.innerHTML = '<span style="color:#f87171;">●</span> <span style="color:rgba(255,255,255,.3);">нет сервера</span>';
+            renderMap(mapWrap, {});
+        });
+}
+
+function renderMap(mapWrap, data){
+    mapWrap.innerHTML = '';
+
+    // Фон карты — светлый как на ТВ-карте
+    mapWrap.style.background = '#dde4f0';
+
+    ROOMS.forEach(function(room){
+        var name=room[0], rx=room[1], ry=room[2], rw=room[3], rh=room[4], pcs=room[5];
+
+        // Блок комнаты
+        var roomEl = document.createElement('div');
+        roomEl.style.cssText = 'position:absolute;left:'+rx+'px;top:'+ry+'px;width:'+rw+'px;height:'+rh+'px;'
+            + 'background:rgba(255,255,255,0.75);border-radius:6px;border:1px solid rgba(255,255,255,0.9);'
+            + 'box-shadow:inset 0 0 0 1px rgba(0,0,0,0.06);';
+
+        // Название комнаты
+        var roomLbl = document.createElement('div');
+        roomLbl.style.cssText = 'position:absolute;right:5px;bottom:3px;font-size:11px;font-weight:700;'
+            + 'color:rgba(0,0,0,0.2);line-height:1;';
+        roomLbl.textContent = name;
+        roomEl.appendChild(roomLbl);
+
+        // Карточки ПК внутри комнаты
+        var cols = Math.ceil(Math.sqrt(pcs.length));
+        var cellW = Math.floor((rw - 8) / cols);
+        var cellH = Math.floor((rh - 18) / Math.ceil(pcs.length / cols));
+
+        pcs.forEach(function(pcName, idx){
+            var col = idx % cols;
+            var row = Math.floor(idx / cols);
+            var pc = data[pcName] || data[String(parseInt(pcName))];
+            var avail = !!pc;
+
+            var cell = document.createElement('button');
+            cell.style.cssText = 'position:absolute;'
+                + 'left:'+(4 + col * cellW)+'px;'
+                + 'top:'+(4 + row * cellH)+'px;'
+                + 'width:'+(cellW - 3)+'px;'
+                + 'height:'+(cellH - 3)+'px;'
+                + 'border-radius:4px;'
+                + 'border:1px solid '+(avail?'rgba(204,0,1,.5)':'rgba(0,0,0,.1)')+';'
+                + 'background:'+(avail?'rgba(204,0,1,.18)':'rgba(255,255,255,.6)')+';'
+                + 'font-size:9px;font-weight:800;'
+                + 'color:'+(avail?'#8b0000':'rgba(0,0,0,.3)')+';'
+                + 'cursor:'+(avail?'pointer':'default')+';'
+                + 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;'
+                + 'transition:background .12s,transform .1s;'
+                + 'font-family:inherit;padding:0;line-height:1;';
+
+            var numSpan = document.createElement('span');
+            numSpan.textContent = pcName;
+            cell.appendChild(numSpan);
+
+            if(avail){
+                var dot = document.createElement('span');
+                dot.style.cssText = 'width:4px;height:4px;border-radius:50%;background:#cc0001;';
+                cell.appendChild(dot);
+
+                cell.addEventListener('mouseenter', function(){
+                    cell.style.background = 'rgba(204,0,1,.35)';
+                    cell.style.transform = 'scale(1.08)';
                 });
-
-                if (!keys.length) {
-                    listEl.innerHTML = '<div style="color:#374151;text-align:center;padding:20px;font-size:13px">Нет ПК в конфиге</div>';
-                    return;
-                }
-
-                keys.forEach(function(name) {
-                    var pc = data[name];
-
-                    var row = document.createElement('div');
-                    row.style.cssText =
-                        'display:flex;align-items:center;background:#111128;' +
-                        'border:1px solid rgba(99,102,241,.12);border-radius:10px;' +
-                        'padding:10px 12px;margin-bottom:6px;gap:10px;' +
-                        'transition:border-color .15s;';
-                    row.onmouseover = function() { row.style.borderColor = 'rgba(220,38,38,.4)'; };
-                    row.onmouseout  = function() { row.style.borderColor = 'rgba(99,102,241,.12)'; };
-
-                    var info = document.createElement('div');
-                    info.style.flex = '1';
-                    info.innerHTML =
-                        '<div style="color:#e2e8f0;font-size:13px;font-weight:600">ПК ' + name + '</div>' +
-                        '<div style="color:#4b5563;font-size:11px;margin-top:2px">' + pc.ip + '</div>';
-
-                    var openBtn = document.createElement('button');
-                    openBtn.textContent = '\u25B6 Открыть';
-                    openBtn.style.cssText =
-                        'background:rgba(220,38,38,.15);color:#ef4444;' +
-                        'border:1px solid rgba(220,38,38,.3);border-radius:7px;' +
-                        'padding:5px 12px;font-size:12px;font-weight:500;' +
-                        'cursor:pointer;white-space:nowrap;font-family:sans-serif;' +
-                        'transition:all .15s;';
-                    openBtn.onmouseover = function() { openBtn.style.background = 'rgba(220,38,38,.25)'; };
-                    openBtn.onmouseout  = function() { openBtn.style.background = 'rgba(220,38,38,.15)'; };
-
-                    openBtn.onclick = function() {
-                        openBtn.disabled = true;
-                        openBtn.textContent = '...';
-fetch(PROXY + '/connect?pc=' + name)
-                            .then(function(r) { return r.json(); })
-                            .then(function(res) {
-                                if (res.error) throw new Error(res.error);
-                                showToast('\u2713 TightVNC открыт для ПК ' + name, true);
-                                openBtn.textContent = '\u2713';
-                                setTimeout(function() {
-                                    openBtn.disabled = false;
-                                    openBtn.textContent = '\u25B6 Открыть';
-                                }, 2000);
-                            })
-                            .catch(function(e) {
-                                showToast('\u2715 ' + e.message, false);
-                                openBtn.disabled = false;
-                                openBtn.textContent = '\u25B6 Открыть';
-                            });
-                    };
-
-                    row.appendChild(info);
-                    row.appendChild(openBtn);
-                    listEl.appendChild(row);
+                cell.addEventListener('mouseleave', function(){
+                    cell.style.background = 'rgba(204,0,1,.18)';
+                    cell.style.transform = '';
                 });
-            })
-            .catch(function() {
-                if (statusEl) {
-                    statusEl.textContent = '\u26A0 Сервер недоступен \u2014 запустите vnc_server.py';
-                    statusEl.style.color = '#ef4444';
-                }
-                listEl.innerHTML =
-                    '<div style="color:#ef4444;text-align:center;padding:16px;font-size:12px">' +
-                    '\u26A0 Сервер не запущен<br>' +
-                    '<span style="color:#374151">Запустите vnc_server.py</span>' +
-                    '</div>';
+                cell.addEventListener('click', function(e){
+                    e.stopPropagation();
+                    connectPC(pcName, cell);
+                });
+            }
+
+            roomEl.appendChild(cell);
+        });
+
+        mapWrap.appendChild(roomEl);
+    });
+}
+
+function connectPC(name, cell){
+    cell.disabled = true;
+    cell.style.opacity = '.5';
+    fetch(PROXY + '/connect?pc=' + encodeURIComponent(name))
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+            if(res.error) throw new Error(res.error);
+            toast('Просмотр экрана ПК ' + name + ' открыт', true);
+            cell.style.background = 'rgba(74,222,128,.25)';
+            cell.style.borderColor = 'rgba(74,222,128,.6)';
+            setTimeout(function(){
+                cell.disabled = false;
+                cell.style.opacity = '';
+                cell.style.background = 'rgba(204,0,1,.18)';
+                cell.style.borderColor = 'rgba(204,0,1,.5)';
+            }, 2000);
+        })
+        .catch(function(e){
+            toast(e.message || 'Ошибка подключения', false);
+            cell.disabled = false;
+            cell.style.opacity = '';
+        });
+}
+
+// ── Кнопка в сайдбаре ────────────────────────────────────
+function createSidebarBtn(){
+    if(document.getElementById('gj-vnc-sidebar-btn')) return;
+    var inner = document.querySelector('.Sidebar_linksInner__oTy_4');
+    if(!inner) return;
+
+    var nativeLink = document.querySelector('a[href="/bookings"]') ||
+                     document.querySelector('a.mantine-NavLink-root');
+    var cls = nativeLink ? nativeLink.className
+        : 'mantine-focus-auto LinksGroup_navLink__qvSOI m_f0824112 mantine-NavLink-root m_87cf2631 mantine-UnstyledButton-root';
+
+    var btn = document.createElement('a');
+    btn.id = 'gj-vnc-sidebar-btn';
+    btn.className = cls;
+    btn.href = 'javascript:void(0)';
+
+    var sec = document.createElement('span');
+    sec.className = 'm_690090b5 mantine-NavLink-section';
+    sec.setAttribute('data-position','left');
+    var icoWrap = document.createElement('div');
+    icoWrap.className = 'LinksGroup_themeIcon__E9SRO m_7341320d mantine-ThemeIcon-root';
+    icoWrap.setAttribute('data-variant','filled');
+    icoWrap.style.cssText = '--ti-size:calc(1.875rem * var(--mantine-scale));--ti-bg:var(--mantine-color-gg_primary-filled,#cc0001);--ti-color:var(--mantine-color-white);--ti-bd:calc(0.0625rem * var(--mantine-scale)) solid transparent;';
+    icoWrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+    sec.appendChild(icoWrap);
+
+    var body = document.createElement('div');
+    body.className = 'm_f07af9d2 mantine-NavLink-body';
+    var lbl = document.createElement('span');
+    lbl.className = 'm_1f6ac4c4 mantine-NavLink-label';
+    lbl.textContent = 'Просмотр экрана';
+    body.appendChild(lbl);
+    btn.appendChild(sec); btn.appendChild(body);
+    btn.addEventListener('click', function(e){ e.stopPropagation(); togglePopup(btn); });
+
+    // Вставляем в конец linksInner — там кнопка появится под всеми нативными
+    inner.appendChild(btn);
+}
+
+function updateSidebarBtn(open){
+    var btn = document.getElementById('gj-vnc-sidebar-btn');
+    if(!btn) return;
+    if(open) btn.setAttribute('data-active','true');
+    else btn.removeAttribute('data-active');
+}
+
+// ── Кнопка просмотра в карточке ПК на дашборде ───────────
+function hookPcCards(){
+    new MutationObserver(function(muts){
+        muts.forEach(function(m){
+            m.addedNodes.forEach(function(n){
+                if(n.nodeType !== 1) return;
+                var panels = n.querySelectorAll ? n.querySelectorAll('[class*="DeviceCard"],[class*="deviceCard"]') : [];
+                panels.forEach(function(panel){
+                    if(panel._vncHooked) return;
+                    panel._vncHooked = true;
+                    var nameEl = panel.querySelector('[class*="name"],[class*="Name"]');
+                    var pcName = nameEl ? nameEl.textContent.trim() : null;
+                    if(!pcName) return;
+                    addVncButtonToCard(panel, pcName);
+                });
             });
-    }
+        });
+    }).observe(document.body, {childList:true, subtree:true});
+}
 
-    function init() {
-        var btn = document.createElement('button');
-        btn.id = 'gj-vnc-btn';
-        btn.title = 'TightVNC — управление ПК';
-        btn.innerHTML =
-            '<svg width="20" height="20" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">' +
-            '<text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" ' +
-            'font-family="Arial,sans-serif" font-size="14" font-weight="900" fill="#fff">G</text>' +
-            '</svg>';
-        btn.style.cssText =
-            'position:fixed;top:170px;right:0;' +
-            'background:#dc2626;color:#fff;' +
-            'border:none;border-radius:8px 0 0 8px;' +
-            'padding:10px 8px;cursor:pointer;' +
-            'z-index:999991;' +
-            'box-shadow:-2px 2px 10px rgba(220,38,38,.5);' +
-            'transition:background .15s;' +
-            'display:flex;align-items:center;justify-content:center;';
-        btn.onmouseover = function() { btn.style.background = '#b91c1c'; };
-        btn.onmouseout  = function() { btn.style.background = '#dc2626'; };
-        document.body.appendChild(btn);
+function addVncButtonToCard(panel, pcName){
+    if(panel.querySelector('.gj-vnc-card-btn')) return;
+    var btn = document.createElement('button');
+    btn.className = 'gj-vnc-card-btn';
+    btn.style.cssText = 'background:var(--mantine-color-gg_primary-filled,#cc0001);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;white-space:nowrap;';
+    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>Просмотр';
+    btn.addEventListener('click', function(e){ e.stopPropagation(); connectPC(pcName, btn); });
+    panel.appendChild(btn);
+}
 
-        var panel = document.createElement('div');
-        panel.id = 'gj-vnc-panel';
-        panel.style.cssText =
-            'position:fixed;top:0;right:0;width:300px;height:100vh;' +
-            'background:#0d0d1e;border-left:1px solid rgba(220,38,38,.2);' +
-            'box-shadow:-4px 0 24px rgba(0,0,0,.6);z-index:999990;' +
-            'font-family:sans-serif;display:flex;flex-direction:column;' +
-            'transform:translateX(100%);transition:transform .3s ease;';
+// ── Init — только body observer, никакого observer на linksInner ──
+function tryInit(){
+    if(!document.querySelector('.Sidebar_linksInner__oTy_4')){ setTimeout(tryInit,500); return; }
+    createSidebarBtn();
+}
 
-        var header = document.createElement('div');
-        header.style.cssText =
-            'background:#111128;border-bottom:1px solid rgba(220,38,38,.2);' +
-            'padding:12px 16px;display:flex;align-items:center;' +
-            'justify-content:space-between;flex-shrink:0';
+new MutationObserver(function(muts){
+    muts.forEach(function(m){
+        if(m.addedNodes.length && !document.getElementById('gj-vnc-sidebar-btn')) tryInit();
+    });
+}).observe(document.body || document.documentElement, {childList:true, subtree:false});
 
-        var titleWrap = document.createElement('div');
-        titleWrap.style.cssText = 'display:flex;align-items:center;gap:8px';
-
-        var logo = document.createElement('div');
-        logo.style.cssText =
-            'width:24px;height:24px;background:#dc2626;border-radius:4px;' +
-            'display:flex;align-items:center;justify-content:center;' +
-            'font-size:14px;font-weight:900;color:#fff;flex-shrink:0';
-        logo.textContent = 'G';
-var titleText = document.createElement('span');
-        titleText.style.cssText = 'color:#f1f5f9;font-weight:600;font-size:14px';
-        titleText.textContent = 'TightVNC';
-
-        titleWrap.appendChild(logo);
-        titleWrap.appendChild(titleText);
-
-        var headerRight = document.createElement('div');
-        headerRight.style.cssText = 'display:flex;gap:8px';
-
-        var refreshBtn = document.createElement('button');
-        refreshBtn.textContent = '\u21BA';
-        refreshBtn.title = 'Обновить';
-        refreshBtn.style.cssText =
-            'background:rgba(220,38,38,.15);color:#ef4444;' +
-            'border:1px solid rgba(220,38,38,.25);border-radius:7px;' +
-            'padding:4px 10px;font-size:14px;cursor:pointer';
-
-        var closeBtn = document.createElement('button');
-        closeBtn.textContent = '\u2715';
-        closeBtn.style.cssText =
-            'background:rgba(99,102,241,.1);color:#6b7280;' +
-            'border:1px solid rgba(99,102,241,.15);border-radius:7px;' +
-            'padding:4px 10px;font-size:12px;cursor:pointer';
-        closeBtn.onclick = function() { panel.style.transform = 'translateX(100%)'; };
-
-        headerRight.appendChild(refreshBtn);
-        headerRight.appendChild(closeBtn);
-        header.appendChild(titleWrap);
-        header.appendChild(headerRight);
-        panel.appendChild(header);
-
-        var statusEl = document.createElement('div');
-        statusEl.style.cssText =
-            'padding:8px 16px;font-size:11px;color:#4b5563;' +
-            'border-bottom:1px solid rgba(99,102,241,.1);flex-shrink:0';
-        statusEl.textContent = 'Проверка сервера...';
-        panel.appendChild(statusEl);
-
-        var listEl = document.createElement('div');
-        listEl.style.cssText = 'flex:1;overflow-y:auto;padding:10px';
-        listEl.innerHTML = '<div style="color:#374151;text-align:center;padding:20px;font-size:13px">Загрузка...</div>';
-        panel.appendChild(listEl);
-
-        var style = document.createElement('style');
-        style.textContent =
-            '#gj-vnc-panel ::-webkit-scrollbar{width:4px}' +
-            '#gj-vnc-panel ::-webkit-scrollbar-track{background:transparent}' +
-            '#gj-vnc-panel ::-webkit-scrollbar-thumb{background:rgba(220,38,38,.3);border-radius:2px}';
-        document.head.appendChild(style);
-
-        document.body.appendChild(panel);
-
-        refreshBtn.onclick = function() { loadList(listEl, statusEl); };
-
-        btn.onclick = function() {
-            var isOpen = panel.style.transform === 'translateX(0px)' ||
-                         panel.style.transform === 'translateX(0)';
-            panel.style.transform = isOpen ? 'translateX(100%)' : 'translateX(0)';
-            if (!isOpen) loadList(listEl, statusEl);
-        };
-
-        setInterval(function() {
-            var isOpen = panel.style.transform === 'translateX(0px)' ||
-                         panel.style.transform === 'translateX(0)';
-            if (isOpen) loadList(listEl, statusEl);
-        }, 15000);
-
-        console.log('[TightVNC] v1.1 готов');
-    }
+setTimeout(tryInit, 1000);
+setTimeout(tryInit, 2500);
+setTimeout(tryInit, 5000);
+hookPcCards();
 
 })();
