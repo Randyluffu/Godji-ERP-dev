@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — TightVNC
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @exclude      https://godji.cloud/tv/*
@@ -14,23 +14,30 @@
 
 var PROXY = 'http://localhost:6080';
 
-// ── Карта комнат (как на ТВ-карте) ───────────────────────
-// Каждая комната — позиция и список ПК
-// x,y,w,h в % от размера всплывашки (400x520)
-var MAP_W = 400, MAP_H = 460;
-var ROOMS = [
-    // [name, x, y, w, h, [pcs...]]
-    ['Q',  270, 10,  120, 90,  ['10','11','12','13']],
-    ['W',  270, 108, 120, 90,  ['14','15','16','17']],
-    ['E',  270, 206, 120, 60,  ['08','09']],
-    ['R',  270, 274, 120, 50,  ['TV1']],
-    ['L',  10,  80,  130, 130, ['01','02','03','04','05']],
-    ['V',  148, 160, 110, 110, ['06','07','41']],
-    ['T',  270, 330, 120, 90,  ['18','19','20','21','22']],
-    ['Y',  148, 280, 110, 170, ['23','24','25','26','27','28','29']],
-    ['X',  10,  240, 130, 170, ['33','34','35','36','37','38','39','40']],
-    ['O',  148, 10,  110, 140, ['30','31','32']],
-];
+// Точные координаты ПК с оригинальной карты дашборда (1920x1133)
+// Карта масштабируется до popup-размера через scale
+var MAP_ORIG_W = 1920, MAP_ORIG_H = 1133;
+// Размер попапа — берём 420px ширину, высота пропорциональна
+var POPUP_W = 420;
+var POPUP_H = Math.round(MAP_ORIG_H / MAP_ORIG_W * POPUP_W); // ~248px
+var MAP_SCALE = POPUP_W / MAP_ORIG_W; // ~0.219
+
+// Реальные координаты ПК (left, top) с оригинальной карты
+var PC_POS = {
+    '01':{x:698,y:388},'02':{x:632,y:390},'03':{x:632,y:275},
+    '04':{x:705,y:273},'05':{x:780,y:274},'06':{x:870,y:475},
+    '07':{x:946,y:477},'08':{x:1142,y:346},'09':{x:1210,y:346},
+    '10':{x:1014,y:48},'11':{x:1072,y:48},'12':{x:1131,y:48},'13':{x:1189,y:48},
+    '14':{x:1107,y:179},'15':{x:1167,y:178},'16':{x:1210,y:281},'17':{x:1145,y:280},
+    '18':{x:1206,y:621},'19':{x:1269,y:621},'20':{x:1247,y:718},
+    '21':{x:1181,y:718},'22':{x:1116,y:718},'23':{x:1105,y:782},'24':{x:1178,y:782},
+    '25':{x:1191,y:908},'26':{x:1137,y:954},'27':{x:1004,y:905},
+    '28':{x:1060,y:882},'29':{x:1003,y:852},'30':{x:933,y:838},
+    '31':{x:933,y:899},'32':{x:934,y:963},'33':{x:839,y:1018},
+    '34':{x:837,y:945},'35':{x:838,y:882},'36':{x:769,y:883},
+    '37':{x:769,y:946},'38':{x:769,y:1017},'39':{x:642,y:931},
+    '40':{x:642,y:865},'41':{x:859,y:615},'TV 1':{x:1173,y:492}
+};
 
 // ── Тост ─────────────────────────────────────────────────
 function toast(msg, ok){
@@ -75,7 +82,7 @@ function openPopup(anchor){
         'position:fixed',
         'left:288px',
         'top:'+(btnRect.top-10)+'px',
-        'width:'+MAP_W+'px',
+        'width:'+POPUP_W+'px',
         'z-index:99990',
         'background:var(--mantine-color-body,#1a1b2e)',
         'border:1px solid rgba(255,255,255,0.1)',
@@ -116,7 +123,7 @@ function openPopup(anchor){
 
     // Карта
     var mapWrap = document.createElement('div');
-    mapWrap.style.cssText = 'position:relative;width:'+MAP_W+'px;height:'+MAP_H+'px;flex-shrink:0;';
+    mapWrap.style.cssText = 'position:relative;width:'+POPUP_W+'px;height:'+POPUP_H+'px;flex-shrink:0;overflow:hidden;';
     mapWrap.id = 'gj-vnc-map';
     popup.appendChild(mapWrap);
 
@@ -177,79 +184,70 @@ function loadPCData(mapWrap, statusDot){
 function renderMap(mapWrap, data){
     mapWrap.innerHTML = '';
 
-    // Фон карты — светлый как на ТВ-карте
-    mapWrap.style.background = '#dde4f0';
+    // Фон — оригинальное изображение карты
+    var bg = document.createElement('img');
+    bg.src = 'https://goodgame-prod.storage.yandexcloud.net/tmp-2-1773905668693';
+    bg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:fill;display:block;';
+    mapWrap.appendChild(bg);
 
-    ROOMS.forEach(function(room){
-        var name=room[0], rx=room[1], ry=room[2], rw=room[3], rh=room[4], pcs=room[5];
+    // Накладываем карточки ПК с точными координатами
+    var CARD = 28; // размер карточки в пикселях на попапе (55 * MAP_SCALE ~ 12, но увеличим для кликабельности)
 
-        // Блок комнаты
-        var roomEl = document.createElement('div');
-        roomEl.style.cssText = 'position:absolute;left:'+rx+'px;top:'+ry+'px;width:'+rw+'px;height:'+rh+'px;'
-            + 'background:rgba(255,255,255,0.75);border-radius:6px;border:1px solid rgba(255,255,255,0.9);'
-            + 'box-shadow:inset 0 0 0 1px rgba(0,0,0,0.06);';
+    Object.keys(PC_POS).forEach(function(name){
+        var pos = PC_POS[name];
+        var px = Math.round(pos.x * MAP_SCALE);
+        var py = Math.round(pos.y * MAP_SCALE);
 
-        // Название комнаты
-        var roomLbl = document.createElement('div');
-        roomLbl.style.cssText = 'position:absolute;right:5px;bottom:3px;font-size:11px;font-weight:700;'
-            + 'color:rgba(0,0,0,0.2);line-height:1;';
-        roomLbl.textContent = name;
-        roomEl.appendChild(roomLbl);
+        // Ищем в данных сервера
+        var numStr = name.replace('TV ','TV');
+        var pc = data[name] || data[numStr] || data[name.replace(/^0/,'')] || null;
+        var avail = !!pc;
 
-        // Карточки ПК внутри комнаты
-        var cols = Math.ceil(Math.sqrt(pcs.length));
-        var cellW = Math.floor((rw - 8) / cols);
-        var cellH = Math.floor((rh - 18) / Math.ceil(pcs.length / cols));
+        var cell = document.createElement('button');
+        cell.title = 'ПК ' + name;
+        cell.style.cssText = [
+            'position:absolute',
+            'left:'+(px - CARD/2)+'px',
+            'top:'+(py - CARD/2)+'px',
+            'width:'+CARD+'px',
+            'height:'+CARD+'px',
+            'border-radius:5px',
+            'border:1.5px solid '+(avail?'rgba(220,38,38,0.9)':'rgba(255,255,255,0.2)'),
+            'background:'+(avail?'rgba(239,68,68,0.75)':'rgba(255,255,255,0.15)'),
+            'color:#fff',
+            'font-size:7px','font-weight:800',
+            'cursor:'+(avail?'pointer':'default'),
+            'display:flex','flex-direction:column','align-items:center','justify-content:center',
+            'gap:1px','font-family:inherit','padding:0','line-height:1',
+            'transition:background .12s,transform .1s',
+            'z-index:2',
+        ].join(';');
 
-        pcs.forEach(function(pcName, idx){
-            var col = idx % cols;
-            var row = Math.floor(idx / cols);
-            var pc = data[pcName] || data[String(parseInt(pcName))];
-            var avail = !!pc;
+        var numEl = document.createElement('span');
+        numEl.textContent = name;
+        cell.appendChild(numEl);
 
-            var cell = document.createElement('button');
-            cell.style.cssText = 'position:absolute;'
-                + 'left:'+(4 + col * cellW)+'px;'
-                + 'top:'+(4 + row * cellH)+'px;'
-                + 'width:'+(cellW - 3)+'px;'
-                + 'height:'+(cellH - 3)+'px;'
-                + 'border-radius:4px;'
-                + 'border:1px solid '+(avail?'rgba(204,0,1,.5)':'rgba(0,0,0,.1)')+';'
-                + 'background:'+(avail?'rgba(204,0,1,.18)':'rgba(255,255,255,.6)')+';'
-                + 'font-size:9px;font-weight:800;'
-                + 'color:'+(avail?'#8b0000':'rgba(0,0,0,.3)')+';'
-                + 'cursor:'+(avail?'pointer':'default')+';'
-                + 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;'
-                + 'transition:background .12s,transform .1s;'
-                + 'font-family:inherit;padding:0;line-height:1;';
+        if(avail){
+            var dot = document.createElement('span');
+            dot.style.cssText = 'width:3px;height:3px;border-radius:50%;background:#fff;opacity:0.8;';
+            cell.appendChild(dot);
+            cell.addEventListener('mouseenter',function(){
+                cell.style.background='rgba(220,38,38,0.95)';
+                cell.style.transform='scale(1.15)';
+                cell.style.zIndex='10';
+            });
+            cell.addEventListener('mouseleave',function(){
+                cell.style.background='rgba(239,68,68,0.75)';
+                cell.style.transform='';
+                cell.style.zIndex='2';
+            });
+            cell.addEventListener('click',function(e){
+                e.stopPropagation();
+                connectPC(name,cell);
+            });
+        }
 
-            var numSpan = document.createElement('span');
-            numSpan.textContent = pcName;
-            cell.appendChild(numSpan);
-
-            if(avail){
-                var dot = document.createElement('span');
-                dot.style.cssText = 'width:4px;height:4px;border-radius:50%;background:#cc0001;';
-                cell.appendChild(dot);
-
-                cell.addEventListener('mouseenter', function(){
-                    cell.style.background = 'rgba(204,0,1,.35)';
-                    cell.style.transform = 'scale(1.08)';
-                });
-                cell.addEventListener('mouseleave', function(){
-                    cell.style.background = 'rgba(204,0,1,.18)';
-                    cell.style.transform = '';
-                });
-                cell.addEventListener('click', function(e){
-                    e.stopPropagation();
-                    connectPC(pcName, cell);
-                });
-            }
-
-            roomEl.appendChild(cell);
-        });
-
-        mapWrap.appendChild(roomEl);
+        mapWrap.appendChild(cell);
     });
 }
 
@@ -312,8 +310,22 @@ function createSidebarBtn(){
     btn.appendChild(sec); btn.appendChild(body);
     btn.addEventListener('click', function(e){ e.stopPropagation(); togglePopup(btn); });
 
-    // Вставляем в конец linksInner — там кнопка появится под всеми нативными
-    inner.appendChild(btn);
+    // Вставляем после последней нативной ссылки в linksInner
+    // (godji-search-btn — fixed в body, не здесь)
+    var allLinks = inner.querySelectorAll(':scope > a.mantine-NavLink-root');
+    var lastNative = null;
+    allLinks.forEach(function(a){
+        if(!a.id || (!a.id.startsWith('godji') && !a.id.startsWith('gj-'))){
+            lastNative = a;
+        }
+    });
+    if(lastNative && lastNative.nextSibling){
+        inner.insertBefore(btn, lastNative.nextSibling);
+    } else if(lastNative){
+        inner.appendChild(btn);
+    } else {
+        inner.appendChild(btn);
+    }
 }
 
 function updateSidebarBtn(open){
