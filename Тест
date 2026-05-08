@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Годжи — Настройки
 // @namespace    http://tampermonkey.net/
-// @version      5.0
-// @description  Центральный пульт управления всеми скриптами расширения ERP
-// @author       Randyluffu
+// @version      4.1
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
+// @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_settings.user.js
+// @downloadURL  https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_settings.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -13,283 +13,183 @@
 (function() {
     'use strict';
 
-    // ── Глобальный реестр настроек ────────────────────────────
-    window.__godjiSettings = window.__godjiSettings || {
-        items: [],
-        register: function(config) {
-            // Предотвращаем дубликаты при перезагрузке страниц
-            if (this.items.find(i => i.id === config.id)) return;
-            this.items.push(config);
-            if (window.__godjiUpdateSettingsUI) window.__godjiUpdateSettingsUI();
+    var _items = [];
+    var _panel = null;
+    var _inner = null;
+    var _open = false;
+
+    // ── Глобальный API регистрации (исправленный) ──────────────────────────
+    window.__godjiRegisterSetting = function(config) {
+        if (!config || !config.id) return;
+
+        // Проверка на дубликаты
+        var exists = _items.find(function(x) { return x.id === config.id; });
+        if (exists) return;
+
+        _items.push(config);
+
+        // Если панель уже создана и открыта — перерисовываем список
+        if (_inner) {
+            renderSettingsList();
         }
     };
 
-    // Алиас для удобства других скриптов
-    window.__godjiRegisterSetting = (cfg) => window.__godjiSettings.register(cfg);
-
-    // Подхватываем очередь, если скрипты загрузились раньше ядра
-    if (window.__godjiSettingsQueue) {
-        window.__godjiSettingsQueue.forEach(cfg => window.__godjiSettings.register(cfg));
-        window.__godjiSettingsQueue = [];
-    }
-
-    let _modal = null;
-    let _searchTerm = '';
-
-    // ── Стили ──────────────────────────────────────────────────
-    const CSS = `
-        #godji-settings-modal {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
-            z-index: 10000; display: flex; align-items: center; justify-content: center;
-            font-family: var(--mantine-font-family, sans-serif);
-        }
-        .gs-container {
-            background: var(--mantine-color-body, #1a1b1e);
-            width: 500px; max-height: 80vh; border-radius: 12px;
-            border: 1px solid var(--mantine-color-dark-4, #373a40);
-            display: flex; flex-direction: column; overflow: hidden;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        }
-        .gs-header {
-            padding: 16px 20px; border-bottom: 1px solid var(--mantine-color-dark-4);
-            display: flex; justify-content: space-between; align-items: center;
-            background: var(--mantine-color-dark-7, #141517);
-        }
-        .gs-title { font-weight: 700; font-size: 18px; color: #fff; }
-        .gs-search {
-            padding: 10px 20px; background: var(--mantine-color-dark-6);
-            border-bottom: 1px solid var(--mantine-color-dark-4);
-        }
-        .gs-search input {
-            width: 100%; background: var(--mantine-color-dark-8); border: 1px solid var(--mantine-color-dark-3);
-            border-radius: 6px; padding: 6px 12px; color: #eee; font-size: 14px; outline: none;
-        }
-        .gs-content { padding: 10px 0; overflow-y: auto; flex: 1; }
-        .gs-item {
-            display: flex; align-items: center; padding: 10px 20px;
-            transition: background 0.2s; border-bottom: 1px solid var(--mantine-color-dark-4);
-        }
-        .gs-item:hover { background: var(--mantine-color-dark-5); }
-        .gs-icon {
-            width: 32px; height: 32px; border-radius: 8px; display: flex;
-            align-items: center; justify-content: center; margin-right: 15px;
-        }
-        .gs-info { flex: 1; }
-        .gs-label { font-size: 14px; font-weight: 500; color: #eee; }
-        .gs-desc { font-size: 11px; color: var(--mantine-color-dimmed); }
-        .gs-control { margin-left: 10px; }
-
-        /* Mantine-like Switch */
-        .gs-switch {
-            position: relative; display: inline-block; width: 38px; height: 20px;
-        }
-        .gs-switch input { opacity: 0; width: 0; height: 0; }
-        .gs-slider {
-            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #444; transition: .3s; border-radius: 20px;
-        }
-        .gs-slider:before {
-            position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
-            background-color: white; transition: .3s; border-radius: 50%;
-        }
-        input:checked + .gs-slider { background-color: var(--mantine-color-gg_primary-filled, #cc0001); }
-        input:checked + .gs-slider:before { transform: translateX(18px); }
-
-        .gs-btn {
-            background: var(--mantine-color-dark-4); border: none; color: #fff;
-            padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
-        }
-        .gs-btn:hover { background: var(--mantine-color-dark-3); }
-        .gs-footer {
-            padding: 12px 20px; background: var(--mantine-color-dark-7);
-            border-top: 1px solid var(--mantine-color-dark-4);
-            display: flex; gap: 10px;
-        }
-    `;
-
-    // ── Логика UI ──────────────────────────────────────────────
-    function toggleModal() {
-        if (_modal) {
-            _modal.remove();
-            _modal = null;
-        } else {
-            renderModal();
+    // Обработка очереди, накопившейся до загрузки основного скрипта ERP
+    if (window.__godjiSettingsQueue && Array.isArray(window.__godjiSettingsQueue)) {
+        while (window.__godjiSettingsQueue.length > 0) {
+            var cfg = window.__godjiSettingsQueue.shift();
+            window.__godjiRegisterSetting(cfg);
         }
     }
 
-    function renderModal() {
-        const style = document.createElement('style');
-        style.textContent = CSS;
-        document.head.appendChild(style);
+    // Переопределяем массив очереди, чтобы новые добавления через push работали корректно,
+    // если какой-то скрипт всё ещё использует старый метод
+    window.__godjiSettingsQueue = {
+        push: function(cfg) {
+            window.__godjiRegisterSetting(cfg);
+        }
+    };
 
-        _modal = document.createElement('div');
-        _modal.id = 'godji-settings-modal';
-        _modal.innerHTML = `
-            <div class="gs-container">
-                <div class="gs-header">
-                    <div class="gs-title">Настройки скриптов</div>
-                    <button class="gs-btn" id="gs-close">✕</button>
-                </div>
-                <div class="gs-search">
-                    <input type="text" placeholder="Поиск настроек..." id="gs-search-input" value="${_searchTerm}">
-                </div>
-                <div class="gs-content" id="gs-items-container"></div>
-                <div class="gs-footer">
-                    <button class="gs-btn" id="gs-export">Экспорт JSON</button>
-                    <button class="gs-btn" id="gs-import">Импорт</button>
-                </div>
-            </div>
-        `;
+    function renderSettingsList() {
+        if (!_inner) return;
+        _inner.innerHTML = '';
 
-        document.body.appendChild(_modal);
+        _items.forEach(function(item) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px;border-bottom:1px solid rgba(255,255,255,0.05);';
 
-        document.getElementById('gs-close').onclick = toggleModal;
-        document.getElementById('gs-search-input').oninput = (e) => {
-            _searchTerm = e.target.value.toLowerCase();
-            updateList();
-        };
-        document.getElementById('gs-export').onclick = exportAllData;
-        document.getElementById('gs-import').onclick = importAllData;
+            var info = document.createElement('div');
+            info.style.cssText = 'display:flex;align-items:center;gap:12px;';
 
-        _modal.onclick = (e) => { if (e.target === _modal) toggleModal(); };
+            var icon = document.createElement('div');
+            icon.style.cssText = 'width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:' + (item.iconBg || '#444');
+            icon.innerHTML = item.icon || '';
 
-        updateList();
-    }
+            var label = document.createElement('span');
+            label.style.cssText = 'font-size:14px;font-weight:500;color:#eee;';
+            label.textContent = item.label;
 
-    window.__godjiUpdateSettingsUI = updateList;
-
-    function updateList() {
-        const container = document.getElementById('gs-items-container');
-        if (!container) return;
-
-        container.innerHTML = '';
-        const filtered = window.__godjiSettings.items.filter(i =>
-            i.label.toLowerCase().includes(_searchTerm)
-        );
-
-        filtered.forEach(item => {
-            const row = document.createElement('div');
-            row.className = 'gs-item';
-
-            const iconHtml = item.icon ? item.icon : '⚙️';
-            const iconBg = item.iconBg || 'var(--mantine-color-dark-4)';
-
-            row.innerHTML = `
-                <div class="gs-icon" style="background:${iconBg}">${iconHtml}</div>
-                <div class="gs-info">
-                    <div class="gs-label">${item.label}</div>
-                    ${item.desc ? `<div class="gs-desc">${item.desc}</div>` : ''}
-                </div>
-                <div class="gs-control"></div>
-            `;
-
-            const ctrl = row.querySelector('.gs-control');
+            info.appendChild(icon);
+            info.appendChild(label);
+            row.appendChild(info);
 
             if (item.type === 'toggle') {
-                const label = document.createElement('label');
-                label.className = 'gs-switch';
-                const input = document.createElement('input');
-                input.type = 'checkbox';
-                input.checked = item.getState();
-                input.onchange = (e) => item.onToggle(e.target.checked);
-                label.innerHTML = `<span class="gs-slider"></span>`;
-                label.prepend(input);
-                ctrl.appendChild(label);
-            } else if (item.type === 'button') {
-                const btn = document.createElement('button');
-                btn.className = 'gs-btn';
-                btn.textContent = item.btnLabel || 'Открыть';
-                btn.onclick = item.onClick;
-                ctrl.appendChild(btn);
+                var btn = document.createElement('div');
+                var active = typeof item.getState === 'function' ? item.getState() : false;
+
+                btn.style.cssText = 'width:34px;height:18px;border-radius:10px;position:relative;cursor:pointer;transition:background 0.2s;';
+                btn.style.background = active ? 'var(--mantine-color-gg_primary-filled, #cc0001)' : '#444';
+
+                var circle = document.createElement('div');
+                circle.style.cssText = 'width:12px;height:12px;background:#fff;border-radius:50%;position:absolute;top:3px;transition:left 0.2s;';
+                circle.style.left = active ? '19px' : '3px';
+
+                btn.appendChild(circle);
+                btn.onclick = function() {
+                    var newState = !(typeof item.getState === 'function' ? item.getState() : false);
+                    if (typeof item.onToggle === 'function') item.onToggle(newState);
+                    btn.style.background = newState ? 'var(--mantine-color-gg_primary-filled, #cc0001)' : '#444';
+                    circle.style.left = newState ? '19px' : '3px';
+                };
+                row.appendChild(btn);
+            } else {
+                var actionBtn = document.createElement('button');
+                actionBtn.textContent = 'Открыть';
+                actionBtn.style.cssText = 'background:#333;border:none;color:#ccc;padding:5px 10px;border-radius:4px;font-size:12px;cursor:pointer;';
+                actionBtn.onclick = function() {
+                    if (typeof item.onClick === 'function') item.onClick();
+                };
+                row.appendChild(actionBtn);
             }
 
-            container.appendChild(row);
+            _inner.appendChild(row);
         });
     }
 
-    // ── Функции импорта/экспорта ──────────────────────────────
-    function exportAllData() {
-        const keys = Object.keys(localStorage).filter(k => k.startsWith('godji_'));
-        const data = {};
-        keys.forEach(k => data[k] = localStorage.getItem(k));
-        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `godji_settings_${new Date().toISOString().slice(0,10)}.json`;
-        a.click();
+    function createPanel() {
+        if (_panel) return;
+
+        _panel = document.createElement('div');
+        _panel.style.cssText = 'position:fixed;right:-320px;top:0;width:300px;height:100vh;background:#1a1b1e;box-shadow:-2px 0 10px rgba(0,0,0,0.3);z-index:9999;transition:right 0.3s;display:flex;flex-direction:column;font-family:sans-serif;';
+
+        var header = document.createElement('div');
+        header.style.cssText = 'padding:16px;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;align-items:center;';
+        header.innerHTML = '<span style="color:#fff;font-weight:700;font-size:16px;">Настройки скриптов</span>';
+
+        var close = document.createElement('div');
+        close.textContent = '×';
+        close.style.cssText = 'color:#888;cursor:pointer;font-size:24px;line-height:1;';
+        close.onclick = hidePanel;
+        header.appendChild(close);
+
+        _inner = document.createElement('div');
+        _inner.style.cssText = 'flex:1;overflow-y:auto;';
+
+        _panel.appendChild(header);
+        _panel.appendChild(_inner);
+        document.body.appendChild(_panel);
     }
 
-    function importAllData() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = e => {
-            const file = e.target.files[0];
-            const reader = new FileReader();
-            reader.onload = event => {
-                try {
-                    const data = JSON.parse(event.target.result);
-                    Object.keys(data).forEach(k => localStorage.setItem(k, data[k]));
-                    alert('Настройки импортированы. Перезагрузите страницу.');
-                    window.location.reload();
-                } catch(err) { alert('Ошибка при чтении файла'); }
-            };
-            reader.readAsText(file);
-        };
-        input.click();
+    function showPanel() {
+        createPanel();
+        renderSettingsList();
+        setTimeout(function() { _panel.style.right = '0'; }, 10);
+        _open = true;
     }
 
-    // ── Интеграция кнопки в Sidebar ────────────────────────────
-    function injectSidebarBtn() {
+    function hidePanel() {
+        if (_panel) _panel.style.right = '-320px';
+        _open = false;
+    }
+
+    function createSidebarBtn() {
         if (document.getElementById('godji-settings-btn')) return;
 
-        // Ищем оригинальную кнопку часов в сайдбаре как якорь
-        const nav = document.querySelector('.Sidebar_linksInner__o9m6S');
-        if (!nav) return;
+        var navbar = document.querySelector('.Sidebar_linksInner__oW_p4');
+        if (!navbar) return;
 
-        const btn = document.createElement('a');
+        var btn = document.createElement('a');
         btn.id = 'godji-settings-btn';
-        btn.className = 'm_f07af9d2 mantine-NavLink-root Sidebar_link__S0_QJ';
-        btn.style.cursor = 'pointer';
-        btn.style.marginTop = 'auto'; // Прижимаем вниз
-        btn.style.borderTop = '1px solid var(--mantine-color-dark-4)';
+        btn.className = 'm_f07af9d2 mantine-NavLink-root';
+        btn.style.cssText = 'cursor:pointer; margin-top: auto;';
 
         btn.innerHTML = `
-            <span class="m_64640166 mantine-NavLink-section Sidebar_linkIcon__3Q7mG" data-position="left">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-            </span>
+            <div class="m_63f5926b mantine-NavLink-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+            </div>
             <div class="m_f07af9d2 mantine-NavLink-body">
-                <span class="m_1f6ac4c4 mantine-NavLink-label">Скрипты</span>
+                <span class="m_1f6ac4c4 mantine-NavLink-label">Настройки ERP</span>
             </div>
         `;
 
-        btn.onclick = (e) => {
+        btn.onclick = function(e) {
             e.preventDefault();
-            toggleModal();
+            if (_open) hidePanel(); else showPanel();
         };
 
-        nav.appendChild(btn);
+        navbar.appendChild(btn);
     }
 
-    // Следим за появлением сайдбара
-    const observer = new MutationObserver(() => injectSidebarBtn());
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // Регистрация собственных настроек (пример)
+    // Регистрация собственных настроек
     window.__godjiRegisterSetting({
-        id: 'godji-settings-export',
-        label: 'Конфигурация ERP',
-        desc: 'Резервное копирование всех настроек скриптов',
-        type: 'button',
-        btnLabel: 'Бэкап',
+        id: 'godji-colors-toggle',
+        label: 'Цвета меню',
         iconBg: '#cc0001',
-        icon: '💾',
-        onClick: exportAllData
+        icon: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>',
+        type: 'toggle',
+        getState: function() { return localStorage.getItem('godji_colors_enabled') === 'true'; },
+        onToggle: function(v) {
+            localStorage.setItem('godji_colors_enabled', v ? 'true' : 'false');
+            document.dispatchEvent(new CustomEvent('godji_colors_toggle', { detail: { enabled: v } }));
+        }
     });
+
+    // Наблюдатель для вставки кнопки в сайдбар
+    var _obs = new MutationObserver(function() {
+        if (!document.getElementById('godji-settings-btn')) createSidebarBtn();
+    });
+    _obs.observe(document.body, { childList: true, subtree: true });
+
+    setTimeout(createSidebarBtn, 1500);
 
 })();
