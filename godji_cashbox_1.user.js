@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      2.9
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1249,99 +1249,82 @@ function updateBtnBadge(){
 }
 
 function createBtn(){
-    if(document.getElementById('godji-cashbox-wrap')) return;
-    var footer=document.querySelector('.Sidebar_footer__1BA98');
-    if(!footer) return;
-    var divider=footer.querySelector('.mantine-Divider-root');
-    if(!divider) return;
+    if(document.getElementById('godji-cashbox-btn')) return;
+    var paper = document.querySelector('.Shifts_shiftsPaper__9Jml_');
+    if(!paper) return;
 
-    // Обёртка для двух кнопок в одну строку
-    var wrap=document.createElement('div');
-    wrap.id='godji-cashbox-wrap';
-    wrap.style.cssText='display:flex;align-items:stretch;gap:2px;width:100%;';
+    // Найти оригинальную кнопку "Открыть/Закрыть смену"
+    var erpBtn = paper.querySelector('button[data-variant="filled"][data-block="true"]');
+    if(!erpBtn) return; // ждём пока ERP отрендерит
 
-    // ── Основная кнопка кассы ──
-    var btn=document.createElement('a');
+    // Сжимаем оригинальную кнопку до маленькой справа
+    erpBtn.removeAttribute('data-block');
+    erpBtn.style.cssText='flex-shrink:0;min-width:0;width:auto;padding:6px 10px;font-size:12px;border-radius:6px;';
+
+    // Строка с нашей кассой + сжатой кнопкой ERP
+    var row = document.createElement('div');
+    row.id='godji-cashbox-row';
+    row.style.cssText='display:flex;align-items:center;gap:6px;width:100%;margin-top:8px;';
+
+    // Наша кнопка кассы — занимает всё свободное место
+    var btn = document.createElement('button');
     btn.id='godji-cashbox-btn';
-    btn.className='mantine-focus-auto LinksGroup_navLink__qvSOI m_f0824112 mantine-NavLink-root m_87cf2631 mantine-UnstyledButton-root';
-    btn.href='javascript:void(0)';
-    btn.style.cssText='display:flex;align-items:center;gap:10px;flex:1;min-width:0;height:46px;padding:8px 10px 8px 12px;cursor:pointer;user-select:none;font-family:inherit;box-sizing:border-box;text-decoration:none;overflow:hidden;';
+    btn.type='button';
+    btn.style.cssText='flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:7px 10px;cursor:pointer;font-family:inherit;overflow:hidden;transition:background 0.15s;';
+    btn.addEventListener('mouseenter',function(){ btn.style.background='rgba(22,101,52,1)'; });
+    btn.addEventListener('mouseleave',function(){ btn.style.background='rgba(22,101,52,0.85)'; });
 
-    var ico=document.createElement('div');
-    ico.className='LinksGroup_themeIcon__E9SRO m_7341320d mantine-ThemeIcon-root';
-    ico.setAttribute('data-variant','filled');
-    ico.style.cssText='width:30px;height:30px;border-radius:8px;background:#166534;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
-    ico.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><circle cx="12" cy="14" r="2"/></svg>';
+    // Иконка
+    var ico = document.createElement('div');
+    ico.style.cssText='width:24px;height:24px;border-radius:6px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
+    ico.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><circle cx="12" cy="14" r="2"/></svg>';
 
-    var dot=document.createElement('span');
+    var dot = document.createElement('span');
     dot.className='gcb-dot';
-    dot.style.cssText='position:absolute;top:-2px;right:-2px;width:7px;height:7px;border-radius:50%;background:#ef4444;border:2px solid var(--mantine-color-body,#1a1b2e);';
+    dot.style.cssText='position:absolute;top:-2px;right:-2px;width:6px;height:6px;border-radius:50%;background:#ef4444;border:1.5px solid #1a1b2e;';
     ico.appendChild(dot);
 
-    var bodyDiv=document.createElement('div');
-    bodyDiv.style.cssText='display:flex;flex-direction:column;justify-content:center;min-width:0;overflow:hidden;flex:1;';
-    var lbl=document.createElement('span');
-    lbl.className='m_1f6ac4c4 mantine-NavLink-label';
-    lbl.style.cssText='font-size:13px;font-weight:600;color:var(--mantine-color-white,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
+    // Текст + сумма
+    var textWrap = document.createElement('div');
+    textWrap.style.cssText='display:flex;flex-direction:column;min-width:0;overflow:hidden;flex:1;';
+    var lbl = document.createElement('span');
+    lbl.style.cssText='font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;letter-spacing:0.1px;';
     lbl.textContent='Касса смены';
-    var sumEl=document.createElement('span');
+    var sumEl = document.createElement('span');
     sumEl.className='gcb-sum';
-    sumEl.style.cssText='font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:1px;color:rgba(255,255,255,0.35);';
-    bodyDiv.appendChild(lbl); bodyDiv.appendChild(sumEl);
+    sumEl.style.cssText='font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:1px;color:rgba(255,255,255,0.4);';
+    textWrap.appendChild(lbl);
+    textWrap.appendChild(sumEl);
 
-    btn.appendChild(ico); btn.appendChild(bodyDiv);
-    btn.addEventListener('click',function(e){ e.stopPropagation(); if(_isOpen)hideModal(); else showModal(); });
-
-    // ── Мини-кнопка "ОС" (Открыть смену — оригинальный ERP флоу) ──
-    var osBtn=document.createElement('a');
-    osBtn.id='godji-cashbox-os-btn';
-    osBtn.href='javascript:void(0)';
-    osBtn.title='Открыть смену (ERP)';
-    osBtn.style.cssText='display:flex;align-items:center;justify-content:center;width:36px;flex-shrink:0;height:46px;cursor:pointer;user-select:none;border-radius:0 6px 6px 0;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.45);font-size:10px;font-weight:700;letter-spacing:0.3px;text-decoration:none;transition:background 0.15s,color 0.15s;box-sizing:border-box;';
-    osBtn.textContent='ОС';
-    osBtn.addEventListener('mouseenter',function(){ osBtn.style.background='rgba(255,255,255,0.12)'; osBtn.style.color='rgba(255,255,255,0.85)'; });
-    osBtn.addEventListener('mouseleave',function(){ osBtn.style.background='rgba(255,255,255,0.05)'; osBtn.style.color='rgba(255,255,255,0.45)'; });
-    osBtn.addEventListener('click',function(e){
+    btn.appendChild(ico);
+    btn.appendChild(textWrap);
+    btn.addEventListener('click',function(e){
         e.stopPropagation();
-        // Кликаем оригинальную кнопку ERP если она есть
-        var erpBtn = document.querySelector('.Shifts_shiftsPaper__9Jml_ button');
-        if(erpBtn){ erpBtn.click(); }
+        if(_isOpen) hideModal(); else showModal();
     });
 
-    wrap.appendChild(btn);
-    wrap.appendChild(osBtn);
-    footer.insertBefore(wrap, divider);
+    // Переносим сжатую ERP-кнопку в нашу строку
+    row.appendChild(btn);
+    row.appendChild(erpBtn);
+
+    // Вставляем строку в конец paper (после существующего контента)
+    paper.appendChild(row);
     updateBtnBadge();
 }
 
 // ── MutationObserver + init ───────────────────────────────
-// Observer на body — восстанавливает кнопку кассы если пропала
-var _obs=new MutationObserver(function(){
-    if(!document.getElementById('godji-cashbox-wrap')) createBtn();
-});
-
-// Отдельный observer на Shifts_shiftsPaper (кнопки смены)
-// subtree:true нужен т.к. кнопка вложена глубоко
-var _shiftObs=new MutationObserver(function(){
-    watchShiftBtn();
+var _obs = new MutationObserver(function(){
+    if(!document.getElementById('godji-cashbox-btn')) createBtn();
 });
 
 function initObservers(){
     _obs.observe(document.body, {childList:true, subtree:false});
-    setTimeout(createBtn, 1200);
+    setTimeout(createBtn, 1500);
     setTimeout(createBtn, 3000);
-    // Ищем paper с кнопками смены и вешаем observer
-    function startShiftObs(){
-        var paper = document.querySelector('.Shifts_shiftsPaper__9Jml_');
-        if(paper){
-            watchShiftBtn();
-            _shiftObs.observe(paper, {childList:true, subtree:true});
-        } else {
-            setTimeout(startShiftObs, 1000);
-        }
-    }
-    setTimeout(startShiftObs, 2000);
+    setTimeout(createBtn, 5000);
 }
+
+
 
 if(document.body){
     initObservers();
