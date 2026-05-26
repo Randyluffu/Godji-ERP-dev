@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.10
+// @version      3.11
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1278,54 +1278,62 @@ function showShiftDeposits(s){
     box2.appendChild(body2);
     // box2 уже добавлен в document.body выше
 
-    // Загружаем пополнения за период смены
-    var sinceTs = s.openedAt;
-    var tillTs  = s.closedAt || Date.now();
+    // Используем seenOpIds — те же id что учитывались в кассе во время смены
+    var ids = s.seenOpIds || [];
+    if(!ids.length){
+        body2.innerHTML='<div style="color:#aaa;text-align:center;padding:40px;font-size:13px;">Операций в этой смене не зафиксировано.<br><span style="font-size:11px;color:#ccc;">История фиксируется начиная с версии 3.11</span></div>';
+        return;
+    }
 
     window.fetch('https://hasura.godji.cloud/v1/graphql',{
         method:'POST',
         headers:{'authorization':_authToken,'content-type':'application/json','x-hasura-role':_hasuraRole},
         body:JSON.stringify({
             operationName:'GCBOpsForShift',
-            query:'query GCBOpsForShift($clubId:Int!,$from:timestamptz!,$till:timestamptz!){wallet_operations(where:{club_id:{_eq:$clubId},created_at:{_gte:$from,_lte:$till},operation_type:{_eq:"deposit"},amount_type:{_eq:"money"}},order_by:{id:desc},limit:200){id created_at amount operation_type user_id wallet_operation_digest{name} user{nickname users_user_profile{name surname}}}}',
-            variables:{clubId:14, from:new Date(sinceTs).toISOString(), till:new Date(tillTs).toISOString()}
+            query:'query GCBOpsForShift($ids:[Int!]!){wallet_operations(where:{id:{_in:$ids}},order_by:{id:asc}){id created_at amount money_type operation_type user_id user{users_user_profile{name surname login}}wallet_operation_digest{name}}}',
+            variables:{ids:ids}
         })
     }).then(function(r){return r.json();}).then(function(d){
         var ops=(d.data&&d.data.wallet_operations)||[];
         body2.innerHTML='';
         if(!ops.length){
-            body2.innerHTML='<div style="color:#aaa;text-align:center;padding:40px;font-size:13px;">Нет пополнений за этот период</div>';
+            body2.innerHTML='<div style="color:#aaa;text-align:center;padding:40px;font-size:13px;">Нет данных</div>';
             return;
         }
         var tbl=document.createElement('table');
         tbl.style.cssText='width:100%;border-collapse:collapse;font-size:13px;';
         var th=document.createElement('thead');
-        th.innerHTML='<tr style="background:#f9f9f9;"><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Время</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Клиент</th><th style="padding:8px 10px;text-align:right;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Сумма</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Комментарий</th></tr>';
+        th.innerHTML='<tr style="background:#f9f9f9;"><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Время</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Клиент</th><th style="padding:8px 10px;text-align:right;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Сумма</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Наименование</th></tr>';
         tbl.appendChild(th);
         var tb=document.createElement('tbody');
-        var total=0;
+        var totalCash=0, totalCard=0;
         ops.forEach(function(op){
-            var u=op.user;
-            var prof=u&&u.users_user_profile;
-            var nick=u?(u.nickname||(prof&&((prof.name||'')+(prof.surname?' '+prof.surname:'')).trim())||'—'):'—';
+            var p=op.user&&op.user.users_user_profile;
+            var nick=p?(p.login?'@'+p.login:((p.name||'')+(p.surname?' '+p.surname:'')).trim()||('id:'+op.user_id)):('id:'+(op.user_id||'?'));
             var digest=(op.wallet_operation_digest&&op.wallet_operation_digest.name)||'';
+            var isCash=op.money_type==='cash';
             var tr=document.createElement('tr');
             tr.style.cssText='border-bottom:1px solid #f5f5f5;';
             tr.innerHTML='<td style="padding:8px 10px;color:#555;font-size:12px;white-space:nowrap;">'+fmtDate(new Date(op.created_at).getTime())+'</td>'+
                 '<td style="padding:8px 10px;color:#1a1a1a;font-size:12px;">'+nick+'</td>'+
-                '<td style="padding:8px 10px;color:#166534;font-weight:700;text-align:right;font-size:12px;">+'+fmtAmtAbs(op.amount)+'</td>'+
+                '<td style="padding:8px 10px;font-weight:700;text-align:right;font-size:12px;color:'+(isCash?'#166534':'#1e40af')+';">+'+fmtAmtAbs(op.amount)+(isCash?' н':'  б')+'</td>'+
                 '<td style="padding:8px 10px;color:#888;font-size:12px;">'+digest+'</td>';
             tb.appendChild(tr);
-            total+=op.amount||0;
+            if(isCash) totalCash+=op.amount||0; else totalCard+=op.amount||0;
         });
         tbl.appendChild(tb);
         body2.appendChild(tbl);
         var foot=document.createElement('div');
-        foot.style.cssText='padding:12px 10px;border-top:2px solid #eee;font-size:13px;font-weight:700;color:#166534;text-align:right;margin-top:4px;';
-        foot.textContent='Итого: '+fmtAmtAbs(total)+' ('+ops.length+' операций)';
+        foot.style.cssText='padding:12px 10px;border-top:2px solid #eee;display:flex;justify-content:space-between;align-items:center;margin-top:4px;';
+        foot.innerHTML='<span style="font-size:12px;color:#888;">'+ops.length+' операций</span>'+
+            '<span style="font-size:13px;font-weight:700;">'+
+            '<span style="color:#166534;">Нал: '+fmtAmtAbs(totalCash)+'</span>'+
+            (totalCard?'  <span style="color:#1e40af;">Безнал: '+fmtAmtAbs(totalCard)+'</span>':'')+
+            '  <span style="color:#1a1a1a;">Итого: '+fmtAmtAbs(totalCash+totalCard)+'</span>'+
+            '</span>';
         body2.appendChild(foot);
     }).catch(function(e){
-        body2.innerHTML='<div style="color:#991b1b;padding:20px;font-size:13px;">Ошибка загрузки: '+e.message+'</div>';
+        body2.innerHTML='<div style="color:#991b1b;padding:20px;font-size:13px;">Ошибка: '+e.message+'</div>';
     });
 
     document.addEventListener('keydown',function eh2(e){
