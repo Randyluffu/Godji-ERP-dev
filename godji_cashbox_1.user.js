@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -539,7 +539,6 @@ function renderModal(){
         tBadge.setAttribute('data-cashval','1');
         tBadge.style.cssText='font-size:18px;font-weight:800;color:#1a1a1a;margin-left:2px;';
         tBadge.textContent=fmtAmtAbs(total);
-        mkBlur(tBadge);
         // Кнопка глаза (hover-блюр вкл/выкл)
         var hdrEye=document.createElement('button');
         hdrEye.style.cssText='background:none;border:none;cursor:pointer;color:#bbb;padding:2px 4px;display:flex;align-items:center;margin-left:4px;transition:color 0.15s;';
@@ -1244,11 +1243,9 @@ function updateBtnBadge(){
     if(sumEl){
         if(shift){
             var total=(shift.cash||0)+(shift.card||0)+(shift.manual||0)-(shift.withdrawal||0)-(shift.debit||0);
-            // Компактный формат: просто сумма без знака валюты если длинная
             var fmt = total >= 10000 ? Math.round(total)+'₽' : fmtAmtAbs(total);
             sumEl.textContent = fmt;
-            sumEl.style.color = total>0 ? 'rgba(134,239,172,0.9)' : 'rgba(255,100,100,0.8)';
-            // Снимаем блюр при наведении на кнопку
+            sumEl.style.color = 'rgba(255,255,255,0.5)';
             sumEl.style.filter='blur(4px)';
             sumEl.onmouseenter=function(){sumEl.style.filter='none';};
             sumEl.onmouseleave=function(){sumEl.style.filter='blur(4px)';};
@@ -1272,8 +1269,8 @@ function createBtn(){
     if(!erpBtn) return;
 
     // Сжимаем ERP-кнопку: узкая, та же высота
-    erpBtn.style.setProperty('flex', '0 0 72px', 'important');
-    erpBtn.style.setProperty('width', '72px', 'important');
+    erpBtn.style.setProperty('flex', '0 0 56px', 'important');
+    erpBtn.style.setProperty('width', '56px', 'important');
     erpBtn.style.setProperty('min-width', '0', 'important');
     erpBtn.style.setProperty('padding', '0 8px', 'important');
     erpBtn.style.setProperty('font-size', '11px', 'important');
@@ -1291,7 +1288,7 @@ function createBtn(){
     var btn = document.createElement('button');
     btn.id = 'godji-cashbox-btn';
     btn.type = 'button';
-    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 10px;height:36px;cursor:pointer;font-family:inherit;overflow:hidden;box-sizing:border-box;transition:background 0.15s;';
+    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 12px;height:54px;cursor:pointer;font-family:inherit;overflow:hidden;box-sizing:border-box;transition:background 0.15s;';
     btn.addEventListener('mouseenter', function(){ btn.style.background='rgba(22,101,52,1)'; });
     btn.addEventListener('mouseleave', function(){ btn.style.background='rgba(22,101,52,0.85)'; });
 
@@ -1308,12 +1305,12 @@ function createBtn(){
     textWrap.style.cssText = 'display:flex;flex-direction:column;min-width:0;overflow:hidden;flex:1;';
 
     var lbl = document.createElement('span');
-    lbl.style.cssText = 'font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
+    lbl.style.cssText = 'font-size:14px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
     lbl.textContent = 'Касса смены';
 
     var sumEl = document.createElement('span');
     sumEl.className = 'gcb-sum';
-    sumEl.style.cssText = 'font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:1px;color:rgba(255,255,255,0.4);';
+    sumEl.style.cssText = 'font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:2px;color:rgba(255,255,255,0.4);';
 
     textWrap.appendChild(lbl);
     textWrap.appendChild(sumEl);
@@ -1333,9 +1330,10 @@ function createBtn(){
     row.appendChild(btn);
     row.appendChild(erpBtn);
     // Одинаковая высота
-    erpBtn.style.height = '36px';
-    erpBtn.style.alignSelf = 'stretch';
-    erpBtn.style.boxSizing = 'border-box';
+    erpBtn.style.setProperty('height', '54px', 'important');
+    erpBtn.style.setProperty('align-self', 'stretch', 'important');
+    erpBtn.style.setProperty('box-sizing', 'border-box', 'important');
+    erpBtn.style.setProperty('font-size', '13px', 'important');
 
     updateBtnBadge();
 }
