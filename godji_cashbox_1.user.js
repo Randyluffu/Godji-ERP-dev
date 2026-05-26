@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.9
+// @version      3.10
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1287,7 +1287,7 @@ function showShiftDeposits(s){
         headers:{'authorization':_authToken,'content-type':'application/json','x-hasura-role':_hasuraRole},
         body:JSON.stringify({
             operationName:'GCBOpsForShift',
-            query:'query GCBOpsForShift($clubId:Int!,$from:timestamptz!,$till:timestamptz!){wallet_operations(where:{club_id:{_eq:$clubId},created_at:{_gte:$from,_lte:$till},operation_type:{_eq:"deposit"},amount_type:{_eq:"money"}},order_by:{id:desc},limit:200){id created_at amount operation_type wallet_operation_digest{name} wallet{user{nickname users_user_profile{name surname}}}}}',
+            query:'query GCBOpsForShift($clubId:Int!,$from:timestamptz!,$till:timestamptz!){wallet_operations(where:{club_id:{_eq:$clubId},created_at:{_gte:$from,_lte:$till},operation_type:{_eq:"deposit"},amount_type:{_eq:"money"}},order_by:{id:desc},limit:200){id created_at amount operation_type user_id wallet_operation_digest{name} user{nickname users_user_profile{name surname}}}}',
             variables:{clubId:14, from:new Date(sinceTs).toISOString(), till:new Date(tillTs).toISOString()}
         })
     }).then(function(r){return r.json();}).then(function(d){
@@ -1305,7 +1305,7 @@ function showShiftDeposits(s){
         var tb=document.createElement('tbody');
         var total=0;
         ops.forEach(function(op){
-            var u=op.wallet&&op.wallet.user;
+            var u=op.user;
             var prof=u&&u.users_user_profile;
             var nick=u?(u.nickname||(prof&&((prof.name||'')+(prof.surname?' '+prof.surname:'')).trim())||'—'):'—';
             var digest=(op.wallet_operation_digest&&op.wallet_operation_digest.name)||'';
