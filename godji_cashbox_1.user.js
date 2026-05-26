@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.8
+// @version      3.9
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1287,7 +1287,7 @@ function showShiftDeposits(s){
         headers:{'authorization':_authToken,'content-type':'application/json','x-hasura-role':_hasuraRole},
         body:JSON.stringify({
             operationName:'GCBOpsForShift',
-            query:'query GCBOpsForShift($clubId:Int!,$from:timestamptz!,$till:timestamptz!){wallet_operations(where:{club_id:{_eq:$clubId},created_at:{_gte:$from,_lte:$till},type:{_in:["deposit","deposit_bonus","manual_deposit"]}},order_by:{id:desc},limit:200){id created_at amount type comment wallet{user{nickname first_name last_name}}}}',
+            query:'query GCBOpsForShift($clubId:Int!,$from:timestamptz!,$till:timestamptz!){wallet_operations(where:{club_id:{_eq:$clubId},created_at:{_gte:$from,_lte:$till},operation_type:{_eq:"deposit"},amount_type:{_eq:"money"}},order_by:{id:desc},limit:200){id created_at amount operation_type wallet_operation_digest{name} wallet{user{nickname users_user_profile{name surname}}}}}',
             variables:{clubId:14, from:new Date(sinceTs).toISOString(), till:new Date(tillTs).toISOString()}
         })
     }).then(function(r){return r.json();}).then(function(d){
@@ -1306,13 +1306,15 @@ function showShiftDeposits(s){
         var total=0;
         ops.forEach(function(op){
             var u=op.wallet&&op.wallet.user;
-            var nick=u?(u.nickname||(u.first_name||'')+(u.last_name?' '+u.last_name:'')):'—';
+            var prof=u&&u.users_user_profile;
+            var nick=u?(u.nickname||(prof&&((prof.name||'')+(prof.surname?' '+prof.surname:'')).trim())||'—'):'—';
+            var digest=(op.wallet_operation_digest&&op.wallet_operation_digest.name)||'';
             var tr=document.createElement('tr');
             tr.style.cssText='border-bottom:1px solid #f5f5f5;';
             tr.innerHTML='<td style="padding:8px 10px;color:#555;font-size:12px;white-space:nowrap;">'+fmtDate(new Date(op.created_at).getTime())+'</td>'+
                 '<td style="padding:8px 10px;color:#1a1a1a;font-size:12px;">'+nick+'</td>'+
                 '<td style="padding:8px 10px;color:#166534;font-weight:700;text-align:right;font-size:12px;">+'+fmtAmtAbs(op.amount)+'</td>'+
-                '<td style="padding:8px 10px;color:#888;font-size:12px;">'+((op.comment)||'')+'</td>';
+                '<td style="padding:8px 10px;color:#888;font-size:12px;">'+digest+'</td>';
             tb.appendChild(tr);
             total+=op.amount||0;
         });
@@ -1375,9 +1377,15 @@ function updateBtnBadge(){
             var fmt = total >= 10000 ? Math.round(total)+'₽' : fmtAmtAbs(total);
             sumEl.textContent = fmt;
             sumEl.style.color = 'rgba(255,255,255,0.5)';
-            sumEl.style.filter='blur(4px)';
-            sumEl.onmouseenter=function(){sumEl.style.filter='none';};
-            sumEl.onmouseleave=function(){sumEl.style.filter='blur(4px)';};
+            if(_blurDisabled){
+                sumEl.style.filter='none';
+                sumEl.onmouseenter=null;
+                sumEl.onmouseleave=null;
+            } else {
+                sumEl.style.filter='blur(4px)';
+                sumEl.onmouseenter=function(){sumEl.style.filter='none';};
+                sumEl.onmouseleave=function(){if(!_blurDisabled)sumEl.style.filter='blur(4px)';};
+            }
         } else {
             sumEl.textContent='закрыта';
             sumEl.style.color='rgba(255,255,255,0.3)';
