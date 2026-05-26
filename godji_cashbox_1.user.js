@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.4
+// @version      3.5
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -24,29 +24,32 @@ var _blurDisabled = (function(){ try{ return localStorage.getItem(GCB_BLUR_KEY)=
 // Если _blurDisabled=true — блюр не ставится совсем.
 function applyModalBlur(container, hidden){
     if(!container) return;
-    // Если блюр глобально выключен — всегда показываем
     var effectiveHidden = !_blurDisabled && hidden;
     container.querySelectorAll('[data-cashval]').forEach(function(el){
-        // Клонируем чтобы сбросить все старые обработчики
-        var fresh = el.cloneNode(true);
-        el.parentNode && el.parentNode.replaceChild(fresh, el);
-        fresh.style.transition = 'filter 0.2s';
+        // Не клонируем — просто обновляем стили и флаг
+        el.style.transition = 'filter 0.2s';
         if(effectiveHidden){
-            // Блюр включён — hover снимает временно
-            fresh.style.filter = 'blur(5px)';
-            fresh.style.userSelect = 'none';
-            fresh.style.cursor = 'pointer';
-            fresh.addEventListener('mouseenter', function(){ fresh.style.filter='none'; });
-            fresh.addEventListener('mouseleave', function(){
-                // Восстанавливаем только если блюр всё ещё активен
-                if(!_blurDisabled && _valuesHidden) fresh.style.filter='blur(5px)';
-            });
+            el.style.filter = 'blur(5px)';
+            el.style.userSelect = 'none';
+            el.style.cursor = 'pointer';
+            // Ставим флаг чтобы mouseenter/mouseleave читали актуальное состояние
+            el._gcbBlurred = true;
         } else {
-            // Блюр выключен — никаких обработчиков, никакого блюра
-            fresh.style.filter = 'none';
-            fresh.style.userSelect = '';
-            fresh.style.cursor = '';
+            el.style.filter = 'none';
+            el.style.userSelect = '';
+            el.style.cursor = '';
+            el._gcbBlurred = false;
         }
+    });
+}
+
+// Вешаем hover-обработчики один раз при создании элемента
+function attachBlurHover(el){
+    el.addEventListener('mouseenter', function(){
+        if(el._gcbBlurred) el.style.filter='none';
+    });
+    el.addEventListener('mouseleave', function(){
+        if(el._gcbBlurred) el.style.filter='blur(5px)';
     });
 }
 
@@ -571,6 +574,7 @@ function renderModal(){
         tBadge.setAttribute('data-cashval','1');
         tBadge.style.cssText='font-size:18px;font-weight:800;color:#1a1a1a;margin-left:2px;';
         tBadge.textContent=fmtAmtAbs(total);
+        attachBlurHover(tBadge);
         // Кнопка глаза (hover-блюр вкл/выкл)
         var hdrEye=document.createElement('button');
         hdrEye.style.cssText='background:none;border:none;cursor:pointer;color:#bbb;padding:2px 4px;display:flex;align-items:center;margin-left:4px;transition:color 0.15s;';
@@ -635,7 +639,12 @@ function renderModal(){
         tb.style.cssText='border:none;background:none;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;color:#aaa;font-family:inherit;transition:all 0.15s;';
         tb.textContent=t[1];
         if(_tab===t[0]){ tb.style.color='#166534'; tb.style.borderBottomColor='#166534'; }
-        tb.addEventListener('click',function(){ _tab=t[0]; renderModal(); });
+        tb.addEventListener('click',function(){
+            _tab=t[0];
+            renderModal();
+            // Восстанавливаем состояние блюра после перерисовки
+            setTimeout(function(){ applyModalBlur(_modal, _valuesHidden); }, 10);
+        });
         tabs.appendChild(tb);
     });
     _modal.appendChild(tabs);
@@ -726,7 +735,7 @@ function showDebugPopup(status, allOps, refunds, diff){
     var ov=document.createElement('div');
     ov.id='gcb-debug-popup';
     ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100001;display:flex;align-items:center;justify-content:center;';
-    ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+    ov.addEventListener('click',function(e){ if(e.target!==ov) return; var dep=document.getElementById('gcb-deposits-box'); if(dep){dep.remove();return;} ov.remove(); });
 
     var box=document.createElement('div');
     box.style.cssText='background:#fff;border-radius:12px;width:720px;max-width:96vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);font-family:inherit;';
@@ -1092,7 +1101,7 @@ function renderHistoryTab(body){
 function showShiftDetail(s){
     var ov=document.createElement('div');
     ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100000;display:flex;align-items:center;justify-content:center;';
-    ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+    ov.addEventListener('click',function(e){ if(e.target!==ov) return; var dep=document.getElementById('gcb-deposits-box'); if(dep){dep.remove();return;} ov.remove(); });
     document.body.appendChild(ov);
 
     var box=document.createElement('div');
@@ -1183,6 +1192,7 @@ function showShiftDeposits(s){
 
     // Модалка пополнений — перетаскиваемая, без затемнения фона
     var box2=document.createElement('div');
+    box2.id='gcb-deposits-box';
     box2.style.cssText='position:fixed;top:10%;left:50%;transform:translateX(-50%);z-index:100002;background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.35);';
     document.body.appendChild(box2);
 
@@ -1197,28 +1207,51 @@ function showShiftDeposits(s){
     hdr2.appendChild(ht2); hdr2.appendChild(hc2);
     box2.appendChild(hdr2);
 
-    // Перетаскивание за шапку
+    // Закрытие по клику вне модалки (вне box2)
+    // Используем capture чтобы перехватить раньше overlay смены
+    document.addEventListener('mousedown', function closeOnOut(e){
+        if(box2 && !box2.contains(e.target)){
+            box2.remove();
+            document.removeEventListener('mousedown', closeOnOut, true);
+        }
+    }, true);
+
+    // Перетаскивание за шапку — через requestAnimationFrame для плавности
     (function(){
-        var dragging=false, startX, startY, origLeft, origTop;
+        var dragging=false, curX=0, curY=0, rafId=null;
+        box2.style.willChange='transform';
+        // Начальное положение через translate для плавности
+        var initLeft = (window.innerWidth - 560) / 2;
+        var initTop  = Math.round(window.innerHeight * 0.10);
+        box2.style.left='0'; box2.style.top='0'; box2.style.transform='none';
+        box2.style.left=initLeft+'px'; box2.style.top=initTop+'px';
+
         hdr2.addEventListener('mousedown',function(e){
             if(e.target===hc2) return;
+            e.preventDefault();
             dragging=true;
             hdr2.style.cursor='grabbing';
             var rect=box2.getBoundingClientRect();
-            startX=e.clientX; startY=e.clientY;
-            origLeft=rect.left; origTop=rect.top;
-            box2.style.transform='none';
-            box2.style.left=origLeft+'px';
-            box2.style.top=origTop+'px';
-        });
-        document.addEventListener('mousemove',function(e){
-            if(!dragging) return;
-            box2.style.left=(origLeft+e.clientX-startX)+'px';
-            box2.style.top=(origTop+e.clientY-startY)+'px';
-        });
-        document.addEventListener('mouseup',function(){
-            dragging=false;
-            hdr2.style.cursor='grab';
+            curX=rect.left; curY=rect.top;
+            box2.style.left=curX+'px'; box2.style.top=curY+'px';
+            var lastMX=e.clientX, lastMY=e.clientY;
+            function onMove(ev){
+                if(!dragging) return;
+                curX+=ev.clientX-lastMX; curY+=ev.clientY-lastMY;
+                lastMX=ev.clientX; lastMY=ev.clientY;
+                if(rafId) cancelAnimationFrame(rafId);
+                rafId=requestAnimationFrame(function(){
+                    box2.style.left=curX+'px';
+                    box2.style.top=curY+'px';
+                });
+            }
+            function onUp(){
+                dragging=false; hdr2.style.cursor='grab';
+                document.removeEventListener('mousemove',onMove);
+                document.removeEventListener('mouseup',onUp);
+            }
+            document.addEventListener('mousemove',onMove);
+            document.addEventListener('mouseup',onUp);
         });
     })();
 
