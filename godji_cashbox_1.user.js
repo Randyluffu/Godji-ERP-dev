@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      2.9
+// @version      3.0
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -500,7 +500,7 @@ var _modal=null, _overlay=null, _isOpen=false, _tab='current';
 
 function buildModal(){
     _overlay=document.createElement('div');
-    _overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99997;display:none;';
+    _overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99997;display:none;pointer-events:auto;';
     _overlay.addEventListener('click',hideModal);
     document.body.appendChild(_overlay);
 
@@ -1214,8 +1214,21 @@ function showShiftDeposits(s){
 
 // ── Диагностика ───────────────────────────────────────────
 // ── Показ/скрытие модалки ────────────────────────────────
-function showModal(){ if(!_modal)buildModal(); _valuesHidden=true; _blurDisabled=false; renderModal(); _modal.style.display='flex'; _overlay.style.display='block'; _isOpen=true; var b=document.getElementById('godji-cashbox-btn');if(b)b.setAttribute('data-active','true'); setTimeout(function(){applyModalBlur(_modal,true);},50); }
-function hideModal(){ if(!_modal)return; _modal.style.display='none'; _overlay.style.display='none'; _isOpen=false; _valuesHidden=true; var b=document.getElementById('godji-cashbox-btn');if(b)b.removeAttribute('data-active'); }
+function showModal(){
+    if(!_modal) buildModal();
+    _valuesHidden=true; _blurDisabled=false;
+    renderModal();
+    _modal.style.display='flex';
+    _overlay.style.display='block';
+    _isOpen=true;
+    setTimeout(function(){applyModalBlur(_modal,true);},50);
+}
+function hideModal(){
+    if(!_modal) return;
+    _modal.style.display='none';
+    _overlay.style.display='none';
+    _isOpen=false; _valuesHidden=true;
+}
 function updateModalIfOpen(){ if(_isOpen)renderModal(); }
 
 // ── Кнопка (NavLink стиль, перед divider) ────────────────
@@ -1253,62 +1266,72 @@ function createBtn(){
     var paper = document.querySelector('.Shifts_shiftsPaper__9Jml_');
     if(!paper) return;
 
-    // Найти оригинальную кнопку "Открыть/Закрыть смену"
-    var erpBtn = paper.querySelector('button[data-variant="filled"][data-block="true"]');
-    if(!erpBtn) return; // ждём пока ERP отрендерит
+    // Оригинальная ERP-кнопка (filled, block) — она должна остаться на месте в DOM
+    var erpBtn = paper.querySelector('button[data-variant="filled"]');
+    if(!erpBtn) return;
 
-    // Сжимаем оригинальную кнопку до маленькой справа
+    // Сжимаем ERP-кнопку до узкой полоски справа
+    // flex: 0 0 auto + фиксированная ширина ~64px
+    erpBtn.style.cssText += ';flex:0 0 64px!important;width:64px!important;min-width:0!important;padding:0 6px!important;font-size:11px!important;white-space:nowrap!important;overflow:hidden!important;';
     erpBtn.removeAttribute('data-block');
-    erpBtn.style.cssText='flex-shrink:0;min-width:0;width:auto;padding:6px 10px;font-size:12px;border-radius:6px;';
 
-    // Строка с нашей кассой + сжатой кнопкой ERP
+    // Если row уже есть — не создаём снова
+    if(document.getElementById('godji-cashbox-row')) return;
+
+    // Обёртка — заменяет erpBtn визуально, но erpBtn остаётся в DOM
+    // Оборачиваем erpBtn в flex-контейнер, добавляя нашу кнопку слева
     var row = document.createElement('div');
-    row.id='godji-cashbox-row';
-    row.style.cssText='display:flex;align-items:center;gap:6px;width:100%;margin-top:8px;';
+    row.id = 'godji-cashbox-row';
+    row.style.cssText = 'display:flex;align-items:stretch;gap:4px;width:100%;';
 
-    // Наша кнопка кассы — занимает всё свободное место
+    // Наша кнопка — flex:1
     var btn = document.createElement('button');
-    btn.id='godji-cashbox-btn';
-    btn.type='button';
-    btn.style.cssText='flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:7px 10px;cursor:pointer;font-family:inherit;overflow:hidden;transition:background 0.15s;';
-    btn.addEventListener('mouseenter',function(){ btn.style.background='rgba(22,101,52,1)'; });
-    btn.addEventListener('mouseleave',function(){ btn.style.background='rgba(22,101,52,0.85)'; });
+    btn.id = 'godji-cashbox-btn';
+    btn.type = 'button';
+    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 10px;height:36px;cursor:pointer;font-family:inherit;overflow:hidden;box-sizing:border-box;transition:background 0.15s;';
+    btn.addEventListener('mouseenter', function(){ btn.style.background='rgba(22,101,52,1)'; });
+    btn.addEventListener('mouseleave', function(){ btn.style.background='rgba(22,101,52,0.85)'; });
 
-    // Иконка
     var ico = document.createElement('div');
-    ico.style.cssText='width:24px;height:24px;border-radius:6px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
-    ico.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><circle cx="12" cy="14" r="2"/></svg>';
+    ico.style.cssText = 'width:22px;height:22px;border-radius:5px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
+    ico.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><circle cx="12" cy="14" r="2"/></svg>';
 
     var dot = document.createElement('span');
-    dot.className='gcb-dot';
-    dot.style.cssText='position:absolute;top:-2px;right:-2px;width:6px;height:6px;border-radius:50%;background:#ef4444;border:1.5px solid #1a1b2e;';
+    dot.className = 'gcb-dot';
+    dot.style.cssText = 'position:absolute;top:-2px;right:-2px;width:6px;height:6px;border-radius:50%;background:#ef4444;border:1.5px solid #1a1b2e;';
     ico.appendChild(dot);
 
-    // Текст + сумма
     var textWrap = document.createElement('div');
-    textWrap.style.cssText='display:flex;flex-direction:column;min-width:0;overflow:hidden;flex:1;';
+    textWrap.style.cssText = 'display:flex;flex-direction:column;min-width:0;overflow:hidden;flex:1;';
+
     var lbl = document.createElement('span');
-    lbl.style.cssText='font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;letter-spacing:0.1px;';
-    lbl.textContent='Касса смены';
+    lbl.style.cssText = 'font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
+    lbl.textContent = 'Касса смены';
+
     var sumEl = document.createElement('span');
-    sumEl.className='gcb-sum';
-    sumEl.style.cssText='font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:1px;color:rgba(255,255,255,0.4);';
+    sumEl.className = 'gcb-sum';
+    sumEl.style.cssText = 'font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:1px;color:rgba(255,255,255,0.4);';
+
     textWrap.appendChild(lbl);
     textWrap.appendChild(sumEl);
-
     btn.appendChild(ico);
     btn.appendChild(textWrap);
-    btn.addEventListener('click',function(e){
+
+    btn.addEventListener('click', function(e){
+        e.preventDefault();
         e.stopPropagation();
         if(_isOpen) hideModal(); else showModal();
     });
 
-    // Переносим сжатую ERP-кнопку в нашу строку
+    // Вставляем row перед erpBtn (не перемещаем erpBtn — React его не трогает)
+    paper.insertBefore(row, erpBtn);
     row.appendChild(btn);
+    // Переносим erpBtn ВНУТРЬ row — он остаётся в DOM paper через row
     row.appendChild(erpBtn);
+    // Выравниваем высоту ERP кнопки под нашу
+    erpBtn.style.height = '36px';
+    erpBtn.style.alignSelf = 'stretch';
 
-    // Вставляем строку в конец paper (после существующего контента)
-    paper.appendChild(row);
     updateBtnBadge();
 }
 
@@ -1323,6 +1346,8 @@ function initObservers(){
     setTimeout(createBtn, 3000);
     setTimeout(createBtn, 5000);
 }
+
+
 
 
 
