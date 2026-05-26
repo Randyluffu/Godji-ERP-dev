@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.11
+// @version      3.12
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1236,8 +1236,8 @@ function showShiftDeposits(s){
         box2.style.left='0';
         box2.style.top='0';
         box2.style.transform='translate3d('+initLeft+'px,'+initTop+'px,0)';
-        box2.style.willChange='transform';
         box2.style.transformOrigin='top left';
+        // willChange только во время перетаскивания — иначе вызывает размытие текста
 
         var tx=initLeft, ty=initTop; // текущая позиция в px
         var rafId=null;
@@ -1247,6 +1247,7 @@ function showShiftDeposits(s){
             e.preventDefault();
             hdr2.setPointerCapture(e.pointerId);
             hdr2.style.cursor='grabbing';
+            box2.style.willChange='transform';
             var startX=e.clientX, startY=e.clientY;
             var startTx=tx, startTy=ty;
 
@@ -1261,6 +1262,7 @@ function showShiftDeposits(s){
             }
             function onUp(){
                 hdr2.style.cursor='grab';
+                box2.style.willChange='auto'; // снимаем после drag — убирает размытие
                 hdr2.removeEventListener('pointermove',onMove);
                 hdr2.removeEventListener('pointerup',onUp);
                 hdr2.removeEventListener('pointercancel',onUp);
@@ -1300,37 +1302,62 @@ function showShiftDeposits(s){
             body2.innerHTML='<div style="color:#aaa;text-align:center;padding:40px;font-size:13px;">Нет данных</div>';
             return;
         }
+        var opTitle=document.createElement('div');
+        opTitle.style.cssText='font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;';
+        opTitle.textContent='Операции смены ('+ops.length+')';
+        body2.appendChild(opTitle);
+
         var tbl=document.createElement('table');
-        tbl.style.cssText='width:100%;border-collapse:collapse;font-size:13px;';
-        var th=document.createElement('thead');
-        th.innerHTML='<tr style="background:#f9f9f9;"><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Время</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Клиент</th><th style="padding:8px 10px;text-align:right;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Сумма</th><th style="padding:8px 10px;text-align:left;color:#888;font-size:11px;border-bottom:2px solid #eee;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">Наименование</th></tr>';
-        tbl.appendChild(th);
-        var tb=document.createElement('tbody');
+        tbl.style.cssText='width:100%;border-collapse:collapse;font-size:12px;';
+        var thead=document.createElement('thead');
+        var thr=document.createElement('tr');
+        thr.style.cssText='background:#f9f9f9;';
+        [['Время','60px'],['Клиент',''],['Тип','55px'],['Сумма','70px'],['Примечание','']].forEach(function(col){
+            var th=document.createElement('th');
+            th.style.cssText='padding:6px 8px;text-align:left;color:#888;font-weight:600;font-size:10px;border-bottom:1px solid #eee;white-space:nowrap;'+(col[1]?'width:'+col[1]+';':'');
+            th.textContent=col[0]; thr.appendChild(th);
+        });
+        thead.appendChild(thr); tbl.appendChild(thead);
+
+        var tbody=document.createElement('tbody');
         var totalCash=0, totalCard=0;
         ops.forEach(function(op){
             var p=op.user&&op.user.users_user_profile;
-            var nick=p?(p.login?'@'+p.login:((p.name||'')+(p.surname?' '+p.surname:'')).trim()||('id:'+op.user_id)):('id:'+(op.user_id||'?'));
+            var nick=p?(p.login?'@'+p.login:((p.name||'')+(p.surname?' '+p.surname:'')).trim()):'';
+            var userId=op.user_id||'';
             var digest=(op.wallet_operation_digest&&op.wallet_operation_digest.name)||'';
             var isCash=op.money_type==='cash';
+            var ts=new Date(op.created_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+
             var tr=document.createElement('tr');
             tr.style.cssText='border-bottom:1px solid #f5f5f5;';
-            tr.innerHTML='<td style="padding:8px 10px;color:#555;font-size:12px;white-space:nowrap;">'+fmtDate(new Date(op.created_at).getTime())+'</td>'+
-                '<td style="padding:8px 10px;color:#1a1a1a;font-size:12px;">'+nick+'</td>'+
-                '<td style="padding:8px 10px;font-weight:700;text-align:right;font-size:12px;color:'+(isCash?'#166534':'#1e40af')+';">+'+fmtAmtAbs(op.amount)+(isCash?' н':'  б')+'</td>'+
-                '<td style="padding:8px 10px;color:#888;font-size:12px;">'+digest+'</td>';
-            tb.appendChild(tr);
+
+            var tdTime=document.createElement('td'); tdTime.style.cssText='padding:6px 8px;color:#888;white-space:nowrap;'; tdTime.textContent=ts;
+            var tdNick=document.createElement('td'); tdNick.style.cssText='padding:6px 8px;max-width:140px;';
+            if(nick&&userId){
+                var lk=document.createElement('a'); lk.href='/clients/'+userId; lk.style.cssText='color:#0066aa;text-decoration:none;font-weight:600;font-size:11px;'; lk.textContent=nick;
+                lk.addEventListener('mouseenter',function(){lk.style.textDecoration='underline';}); lk.addEventListener('mouseleave',function(){lk.style.textDecoration='none';});
+                tdNick.appendChild(lk);
+            } else { tdNick.textContent='—'; tdNick.style.color='#ccc'; }
+            var tdType=document.createElement('td'); tdType.style.cssText='padding:6px 8px;white-space:nowrap;';
+            var typeBadge=document.createElement('span');
+            typeBadge.style.cssText='font-size:10px;font-weight:700;padding:2px 5px;border-radius:4px;'+(isCash?'background:#dcfce7;color:#166534;':'background:#dbeafe;color:#1d4ed8;');
+            typeBadge.textContent=isCash?'НАЛ':'КАРТА'; tdType.appendChild(typeBadge);
+            var tdAmt=document.createElement('td'); tdAmt.style.cssText='padding:6px 8px;font-weight:700;white-space:nowrap;color:#166534;'; tdAmt.textContent='+'+Math.round(op.amount)+'₽';
+            var tdNote=document.createElement('td'); tdNote.style.cssText='padding:6px 8px;color:#aaa;font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; tdNote.textContent=digest.slice(0,40);
+
+            tr.appendChild(tdTime); tr.appendChild(tdNick); tr.appendChild(tdType); tr.appendChild(tdAmt); tr.appendChild(tdNote);
+            tbody.appendChild(tr);
             if(isCash) totalCash+=op.amount||0; else totalCard+=op.amount||0;
         });
-        tbl.appendChild(tb);
-        body2.appendChild(tbl);
+        tbl.appendChild(tbody); body2.appendChild(tbl);
+
         var foot=document.createElement('div');
-        foot.style.cssText='padding:12px 10px;border-top:2px solid #eee;display:flex;justify-content:space-between;align-items:center;margin-top:4px;';
-        foot.innerHTML='<span style="font-size:12px;color:#888;">'+ops.length+' операций</span>'+
-            '<span style="font-size:13px;font-weight:700;">'+
-            '<span style="color:#166534;">Нал: '+fmtAmtAbs(totalCash)+'</span>'+
-            (totalCard?'  <span style="color:#1e40af;">Безнал: '+fmtAmtAbs(totalCard)+'</span>':'')+
-            '  <span style="color:#1a1a1a;">Итого: '+fmtAmtAbs(totalCash+totalCard)+'</span>'+
-            '</span>';
+        foot.style.cssText='padding:10px 8px;border-top:2px solid #eee;display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:13px;font-weight:700;';
+        foot.innerHTML='<span style="font-size:12px;color:#888;font-weight:400;">'+ops.length+' операций</span>'+
+            '<span><span style="color:#166534;">Нал: '+fmtAmtAbs(totalCash)+'</span>'+
+            (totalCard?' &nbsp;<span style="color:#1d4ed8;">Безнал: '+fmtAmtAbs(totalCard)+'</span>':'')+
+            ' &nbsp;<span style="color:#1a1a1a;">Итого: '+fmtAmtAbs(totalCash+totalCard)+'</span></span>';
         body2.appendChild(foot);
     }).catch(function(e){
         body2.innerHTML='<div style="color:#991b1b;padding:20px;font-size:13px;">Ошибка: '+e.message+'</div>';
