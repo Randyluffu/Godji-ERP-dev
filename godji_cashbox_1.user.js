@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.7
+// @version      3.8
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1398,8 +1398,8 @@ function createBtn(){
     if(!erpBtn) return;
 
     // Сжимаем ERP-кнопку: узкая, та же высота
-    erpBtn.style.setProperty('flex', '0 0 72px', 'important');
-    erpBtn.style.setProperty('width', '72px', 'important');
+    erpBtn.style.setProperty('flex', '0 0 62px', 'important');
+    erpBtn.style.setProperty('width', '62px', 'important');
     erpBtn.style.setProperty('min-width', '0', 'important');
     erpBtn.style.setProperty('padding', '4px 6px', 'important');
     erpBtn.style.setProperty('font-size', '10px', 'important');
@@ -1414,18 +1414,18 @@ function createBtn(){
     // Оборачиваем erpBtn в flex-контейнер, добавляя нашу кнопку слева
     var row = document.createElement('div');
     row.id = 'godji-cashbox-row';
-    row.style.cssText = 'display:flex;align-items:stretch;gap:4px;width:100%;';
+    row.style.cssText = 'display:flex;align-items:stretch;gap:3px;width:100%;';
 
     // Наша кнопка — flex:1
     var btn = document.createElement('button');
     btn.id = 'godji-cashbox-btn';
     btn.type = 'button';
-    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 12px;height:54px;cursor:pointer;font-family:inherit;box-sizing:border-box;transition:background 0.15s;';
+    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:6px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 8px;height:54px;cursor:pointer;font-family:inherit;box-sizing:border-box;transition:background 0.15s;';
     btn.addEventListener('mouseenter', function(){ btn.style.background='rgba(22,101,52,1)'; });
     btn.addEventListener('mouseleave', function(){ btn.style.background='rgba(22,101,52,0.85)'; });
 
     var ico = document.createElement('div');
-    ico.style.cssText = 'width:22px;height:22px;border-radius:5px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
+    ico.style.cssText = 'width:20px;height:20px;border-radius:4px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;';
     ico.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><circle cx="12" cy="14" r="2"/></svg>';
 
     var dot = document.createElement('span');
@@ -1437,12 +1437,12 @@ function createBtn(){
     textWrap.style.cssText = 'display:flex;flex-direction:column;min-width:0;flex:1;';
 
     var lbl = document.createElement('span');
-    lbl.style.cssText = 'font-size:14px;font-weight:700;color:#fff;white-space:nowrap;line-height:1.2;';
+    lbl.style.cssText = 'font-size:13px;font-weight:700;color:#fff;white-space:nowrap;line-height:1.2;';
     lbl.textContent = 'Касса смены';
 
     var sumEl = document.createElement('span');
     sumEl.className = 'gcb-sum';
-    sumEl.style.cssText = 'font-size:12px;font-weight:600;white-space:nowrap;line-height:1.2;margin-top:2px;color:rgba(255,255,255,0.4);';
+    sumEl.style.cssText = 'font-size:11px;font-weight:600;white-space:nowrap;line-height:1.2;margin-top:2px;color:rgba(255,255,255,0.4);';
 
     textWrap.appendChild(lbl);
     textWrap.appendChild(sumEl);
