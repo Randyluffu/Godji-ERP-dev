@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -612,11 +612,15 @@ function renderModal(){
         hdrNoBlur.addEventListener('click',function(e){
             e.stopPropagation();
             _blurDisabled=!_blurDisabled;
-            // Сохраняем состояние до закрытия смены
             try{ if(_blurDisabled) localStorage.setItem(GCB_BLUR_KEY,'1');
                  else localStorage.removeItem(GCB_BLUR_KEY); }catch(ex){}
-            if(_blurDisabled) _valuesHidden=false;
-            // Мгновенно применяем к модалке
+            if(_blurDisabled){
+                // Выключаем скрытие — показываем всё
+                _valuesHidden=false;
+            } else {
+                // Включаем скрытие обратно — сразу блюрим
+                _valuesHidden=true;
+            }
             applyModalBlur(_modal, _valuesHidden);
             setEyeIcon(_valuesHidden);
             setNoBlurState();
@@ -1203,18 +1207,24 @@ function showShiftDeposits(s){
     ht2.textContent='Пополнения смены: '+fmtDate(s.openedAt);
     var hc2=document.createElement('button');
     hc2.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;line-height:1;';
-    hc2.textContent='×'; hc2.addEventListener('click',function(){box2.remove();});
+    hc2.textContent='×'; hc2.addEventListener('click',function(){ if(box2._closeOnOut) document.removeEventListener('click',box2._closeOnOut,true); box2.remove(); });
     hdr2.appendChild(ht2); hdr2.appendChild(hc2);
     box2.appendChild(hdr2);
 
-    // Закрытие по клику вне модалки (вне box2)
-    // Используем capture чтобы перехватить раньше overlay смены
-    document.addEventListener('mousedown', function closeOnOut(e){
-        if(box2 && !box2.contains(e.target)){
-            box2.remove();
-            document.removeEventListener('mousedown', closeOnOut, true);
+    // Закрытие по клику вне модалки — через 'click' с задержкой после открытия
+    // (задержка нужна чтобы сам клик открытия не закрыл сразу)
+    setTimeout(function(){
+        function closeOnOut(e){
+            if(!box2.isConnected){ document.removeEventListener('click', closeOnOut, true); return; }
+            if(!box2.contains(e.target)){
+                e.stopPropagation(); // не даём клику закрыть и overlay смены
+                box2.remove();
+                document.removeEventListener('click', closeOnOut, true);
+            }
         }
-    }, true);
+        document.addEventListener('click', closeOnOut, true);
+        box2._closeOnOut = closeOnOut; // сохраняем для Escape
+    }, 200);
 
     // Перетаскивание за шапку — через requestAnimationFrame для плавности
     (function(){
@@ -1310,7 +1320,11 @@ function showShiftDeposits(s){
     });
 
     document.addEventListener('keydown',function eh2(e){
-        if(e.key==='Escape'){box2.remove();document.removeEventListener('keydown',eh2);}
+        if(e.key==='Escape'){
+            if(box2._closeOnOut) document.removeEventListener('click', box2._closeOnOut, true);
+            box2.remove();
+            document.removeEventListener('keydown',eh2);
+        }
     });
 }
 
