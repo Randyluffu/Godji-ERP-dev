@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -13,8 +13,10 @@
 'use strict';
 
 // ── Блюр сумм ─────────────────────────────────────────────
-var _valuesHidden = true;  // hover-блюр включён по умолчанию
-var _blurDisabled = false; // глобальное отключение блюра (сбрасывается при закрытии модалки)
+var _valuesHidden = true;
+// _blurDisabled сохраняется до закрытия смены (в localStorage), сбрасывается при открытии новой
+var GCB_BLUR_KEY = 'godji_cashbox_blur_off';
+var _blurDisabled = (function(){ try{ return localStorage.getItem(GCB_BLUR_KEY)==='1'; }catch(e){return false;} })();
 
 // Применяет/снимает блюр на все [data-cashval] внутри container.
 // hidden=true  → блюр включён (hover снимает)
@@ -509,6 +511,9 @@ function closeShift(shift, source){
     if(shifts.length>90) shifts=shifts.slice(0,90);
     saveShifts(shifts);
     saveCurrent(null);
+    // Сбрасываем отключение скрытия при закрытии смены
+    try{ localStorage.removeItem(GCB_BLUR_KEY); }catch(ex){}
+    _blurDisabled=false;
     updateBtnBadge(); updateModalIfOpen();
 }
 
@@ -533,7 +538,7 @@ function buildModal(){
 
     _modal=document.createElement('div');
     _modal.id='godji-cashbox-modal';
-    _modal.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99998;width:640px;max-width:96vw;max-height:90vh;background:#fff;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.22);display:none;flex-direction:column;font-family:inherit;overflow:hidden;';
+    _modal.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99998;width:720px;max-width:96vw;max-height:90vh;background:#fff;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.22);display:none;flex-direction:column;font-family:inherit;overflow:hidden;';
     document.body.appendChild(_modal);
 
     document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&_isOpen) hideModal(); });
@@ -588,27 +593,29 @@ function renderModal(){
         hdrNoBlur.style.cssText='background:none;border:none;cursor:pointer;padding:2px 8px;margin-left:4px;font-size:11px;font-weight:600;border-radius:4px;transition:background 0.15s,color 0.15s;font-family:inherit;white-space:nowrap;';
         function setNoBlurState(){
             if(_blurDisabled){
-                hdrNoBlur.textContent='Блюр выкл';
+                hdrNoBlur.textContent='Скрытие: выкл';
                 hdrNoBlur.style.color='#166534';
                 hdrNoBlur.style.background='#dcfce7';
-                hdrNoBlur.title='Включить блюр обратно';
+                hdrNoBlur.title='Включить скрытие сумм';
             } else {
-                hdrNoBlur.textContent='Выкл блюр';
+                hdrNoBlur.textContent='Скрытие: вкл';
                 hdrNoBlur.style.color='#888';
                 hdrNoBlur.style.background='rgba(0,0,0,0.05)';
-                hdrNoBlur.title='Выключить блюр до закрытия смены';
+                hdrNoBlur.title='Выключить скрытие сумм (до новой смены)';
             }
         }
         setNoBlurState();
         hdrNoBlur.addEventListener('click',function(e){
             e.stopPropagation();
             _blurDisabled=!_blurDisabled;
-            // При отключении блюра — сразу убираем hover-блюр тоже
+            // Сохраняем состояние до закрытия смены
+            try{ if(_blurDisabled) localStorage.setItem(GCB_BLUR_KEY,'1');
+                 else localStorage.removeItem(GCB_BLUR_KEY); }catch(ex){}
             if(_blurDisabled) _valuesHidden=false;
-            applyModalBlur(_modal, false);
+            // Мгновенно применяем к модалке
+            applyModalBlur(_modal, _valuesHidden);
             setEyeIcon(_valuesHidden);
             setNoBlurState();
-            // Синхронизируем кнопку кассы
             updateBtnBlurState();
         });
 
@@ -722,7 +729,7 @@ function showDebugPopup(status, allOps, refunds, diff){
     ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
 
     var box=document.createElement('div');
-    box.style.cssText='background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);font-family:inherit;';
+    box.style.cssText='background:#fff;border-radius:12px;width:720px;max-width:96vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);font-family:inherit;';
 
     // Шапка
     var hdr=document.createElement('div');
@@ -1069,10 +1076,10 @@ function renderHistoryTab(body){
             [fmtAmtAbs(s.manual),                'color:#7c3aed;font-weight:600;'],
             [fmtAmtAbs(s.withdrawal),            'color:#b45309;font-weight:600;'],
             [fmtAmtAbs(s.debit||0),              'color:#991b1b;font-weight:600;'],
-            [fmtAmtAbs(total),                   'font-weight:800;color:#1a1a1a;'],
+            [fmtAmtAbs(total),                   'font-weight:800;color:#1a1a1a;font-size:14px;'],
         ].forEach(function(col){
             var td=document.createElement('td');
-            td.style.cssText='padding:9px 12px;font-size:12px;white-space:nowrap;'+col[1];
+            td.style.cssText='padding:9px 12px;font-size:12px;white-space:nowrap;'+col[1]; if(col[1].indexOf('font-size:14px')!==-1) td.style.fontSize='14px';
             td.textContent=col[0]; tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -1089,7 +1096,7 @@ function showShiftDetail(s){
     document.body.appendChild(ov);
 
     var box=document.createElement('div');
-    box.style.cssText='background:#fff;border-radius:12px;width:520px;max-width:96vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);';
+    box.style.cssText='background:#fff;border-radius:12px;width:720px;max-width:96vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);';
 
     var hdr=document.createElement('div');
     hdr.style.cssText='padding:14px 20px 10px;border-bottom:1px solid #f0f0f0;flex-shrink:0;';
@@ -1278,7 +1285,9 @@ function showShiftDeposits(s){
 // ── Показ/скрытие модалки ────────────────────────────────
 function showModal(){
     if(!_modal) buildModal();
-    _valuesHidden=true; _blurDisabled=false;
+    _valuesHidden=true;
+    // Восстанавливаем сохранённое состояние скрытия (не сбрасываем при каждом открытии)
+    _blurDisabled = (function(){ try{ return localStorage.getItem(GCB_BLUR_KEY)==='1'; }catch(e){return false;} })();
     renderModal();
     _modal.style.display='flex';
     _overlay.style.display='block';
