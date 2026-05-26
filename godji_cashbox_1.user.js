@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.2
+// @version      3.3
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -22,20 +22,47 @@ var _blurDisabled = false; // глобальное отключение блюр
 // Если _blurDisabled=true — блюр не ставится совсем.
 function applyModalBlur(container, hidden){
     if(!container) return;
-    var effectiveHidden = hidden && !_blurDisabled;
+    // Если блюр глобально выключен — всегда показываем
+    var effectiveHidden = !_blurDisabled && hidden;
     container.querySelectorAll('[data-cashval]').forEach(function(el){
-        // Снимаем старые обработчики клонированием
+        // Клонируем чтобы сбросить все старые обработчики
         var fresh = el.cloneNode(true);
         el.parentNode && el.parentNode.replaceChild(fresh, el);
-        fresh.style.filter = effectiveHidden ? 'blur(5px)' : 'none';
-        fresh.style.userSelect = effectiveHidden ? 'none' : '';
         fresh.style.transition = 'filter 0.2s';
         if(effectiveHidden){
+            // Блюр включён — hover снимает временно
+            fresh.style.filter = 'blur(5px)';
+            fresh.style.userSelect = 'none';
+            fresh.style.cursor = 'pointer';
             fresh.addEventListener('mouseenter', function(){ fresh.style.filter='none'; });
-            fresh.addEventListener('mouseleave', function(){ if(_valuesHidden && !_blurDisabled) fresh.style.filter='blur(5px)'; });
+            fresh.addEventListener('mouseleave', function(){
+                // Восстанавливаем только если блюр всё ещё активен
+                if(!_blurDisabled && _valuesHidden) fresh.style.filter='blur(5px)';
+            });
+        } else {
+            // Блюр выключен — никаких обработчиков, никакого блюра
+            fresh.style.filter = 'none';
+            fresh.style.userSelect = '';
+            fresh.style.cursor = '';
         }
     });
 }
+
+// Синхронизирует блюр суммы на кнопке в сайдбаре
+function updateBtnBlurState(){
+    var sumEl = document.querySelector('#godji-cashbox-btn .gcb-sum');
+    if(!sumEl) return;
+    if(_blurDisabled){
+        sumEl.style.filter='none';
+        sumEl.onmouseenter=null;
+        sumEl.onmouseleave=null;
+    } else {
+        sumEl.style.filter='blur(4px)';
+        sumEl.onmouseenter=function(){sumEl.style.filter='none';};
+        sumEl.onmouseleave=function(){if(!_blurDisabled)sumEl.style.filter='blur(4px)';};
+    }
+}
+
 
 
 var STORAGE_KEY = 'godji_cashbox';
@@ -556,22 +583,33 @@ function renderModal(){
             setEyeIcon(_valuesHidden);
         });
 
-        // Кнопка "выключить блюр совсем" — сбрасывается при переоткрытии
+        // Кнопка "выключить блюр совсем" — текстовая, сбрасывается при переоткрытии
         var hdrNoBlur=document.createElement('button');
-        hdrNoBlur.style.cssText='background:none;border:none;cursor:pointer;padding:2px 4px;display:flex;align-items:center;margin-left:2px;transition:color 0.15s;';
-        function setNoBlurIcon(){
-            hdrNoBlur.title=_blurDisabled?'Включить блюр':'Выключить блюр';
-            hdrNoBlur.style.color=_blurDisabled?'#166534':'#bbb';
-            hdrNoBlur.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><line x1="4" y1="4" x2="20" y2="20" style="display:'+(_blurDisabled?'none':'block')+'"/></svg>';
+        hdrNoBlur.style.cssText='background:none;border:none;cursor:pointer;padding:2px 8px;margin-left:4px;font-size:11px;font-weight:600;border-radius:4px;transition:background 0.15s,color 0.15s;font-family:inherit;white-space:nowrap;';
+        function setNoBlurState(){
+            if(_blurDisabled){
+                hdrNoBlur.textContent='Блюр выкл';
+                hdrNoBlur.style.color='#166534';
+                hdrNoBlur.style.background='#dcfce7';
+                hdrNoBlur.title='Включить блюр обратно';
+            } else {
+                hdrNoBlur.textContent='Выкл блюр';
+                hdrNoBlur.style.color='#888';
+                hdrNoBlur.style.background='rgba(0,0,0,0.05)';
+                hdrNoBlur.title='Выключить блюр до закрытия смены';
+            }
         }
-        setNoBlurIcon();
+        setNoBlurState();
         hdrNoBlur.addEventListener('click',function(e){
             e.stopPropagation();
             _blurDisabled=!_blurDisabled;
+            // При отключении блюра — сразу убираем hover-блюр тоже
             if(_blurDisabled) _valuesHidden=false;
-            applyModalBlur(_modal,_valuesHidden);
+            applyModalBlur(_modal, false);
             setEyeIcon(_valuesHidden);
-            setNoBlurIcon();
+            setNoBlurState();
+            // Синхронизируем кнопку кассы
+            updateBtnBlurState();
         });
 
         tw.appendChild(tBadge); tw.appendChild(hdrEye); tw.appendChild(hdrNoBlur);
@@ -1054,23 +1092,26 @@ function showShiftDetail(s){
     box.style.cssText='background:#fff;border-radius:12px;width:520px;max-width:96vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);';
 
     var hdr=document.createElement('div');
-    hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f0f0f0;flex-shrink:0;';
+    hdr.style.cssText='padding:14px 20px 10px;border-bottom:1px solid #f0f0f0;flex-shrink:0;';
+    // Строка 1: заголовок + крестик
+    var hdrTop=document.createElement('div');
+    hdrTop.style.cssText='display:flex;align-items:center;justify-content:space-between;';
     var ht=document.createElement('span');
     ht.style.cssText='font-size:14px;font-weight:700;color:#1a1a1a;';
     ht.textContent='Смена: '+fmtDate(s.openedAt)+' → '+(s.closedAt?fmtDate(s.closedAt):'открыта');
-    var hdrRight=document.createElement('div');
-    hdrRight.style.cssText='display:flex;align-items:center;gap:8px;';
-
-    var depBtn=document.createElement('button');
-    depBtn.style.cssText='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;color:#166534;font-size:12px;font-weight:600;cursor:pointer;padding:5px 10px;font-family:inherit;display:flex;align-items:center;gap:5px;';
-    depBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>Пополнения';
-    depBtn.addEventListener('click',function(){ showShiftDeposits(s); });
-
     var hc=document.createElement('button');
-    hc.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;';
+    hc.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;line-height:1;';
     hc.textContent='×'; hc.addEventListener('click',function(){ov.remove();});
-    hdrRight.appendChild(depBtn); hdrRight.appendChild(hc);
-    hdr.appendChild(ht); hdr.appendChild(hdrRight);
+    hdrTop.appendChild(ht); hdrTop.appendChild(hc);
+    // Строка 2: кнопка "История пополнений" по центру
+    var hdrBot=document.createElement('div');
+    hdrBot.style.cssText='display:flex;justify-content:center;margin-top:8px;';
+    var depBtn=document.createElement('button');
+    depBtn.style.cssText='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;color:#166534;font-size:12px;font-weight:600;cursor:pointer;padding:5px 16px;font-family:inherit;';
+    depBtn.textContent='История пополнений';
+    depBtn.addEventListener('click',function(){ showShiftDeposits(s); });
+    hdrBot.appendChild(depBtn);
+    hdr.appendChild(hdrTop); hdr.appendChild(hdrBot);
     box.appendChild(hdr);
 
     var total=(s.cash||0)+(s.card||0)+(s.manual||0)-(s.withdrawal||0)-(s.debit||0);
@@ -1133,30 +1174,52 @@ function showShiftDetail(s){
 function showShiftDeposits(s){
     if(!_authToken){ alert('Нет токена авторизации'); return; }
 
-    var ov2=document.createElement('div');
-    ov2.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:100001;display:flex;align-items:center;justify-content:center;';
-    ov2.addEventListener('click',function(e){if(e.target===ov2)ov2.remove();});
-    document.body.appendChild(ov2);
-
+    // Модалка пополнений — перетаскиваемая, без затемнения фона
     var box2=document.createElement('div');
-    box2.style.cssText='background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.3);';
+    box2.style.cssText='position:fixed;top:10%;left:50%;transform:translateX(-50%);z-index:100002;background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.35);';
+    document.body.appendChild(box2);
 
     var hdr2=document.createElement('div');
-    hdr2.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f0f0f0;flex-shrink:0;';
+    hdr2.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f0f0f0;flex-shrink:0;cursor:grab;user-select:none;background:#fafafa;border-radius:12px 12px 0 0;';
     var ht2=document.createElement('span');
     ht2.style.cssText='font-size:14px;font-weight:700;color:#1a1a1a;';
     ht2.textContent='Пополнения смены: '+fmtDate(s.openedAt);
     var hc2=document.createElement('button');
-    hc2.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;';
-    hc2.textContent='×'; hc2.addEventListener('click',function(){ov2.remove();});
+    hc2.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;line-height:1;';
+    hc2.textContent='×'; hc2.addEventListener('click',function(){box2.remove();});
     hdr2.appendChild(ht2); hdr2.appendChild(hc2);
     box2.appendChild(hdr2);
+
+    // Перетаскивание за шапку
+    (function(){
+        var dragging=false, startX, startY, origLeft, origTop;
+        hdr2.addEventListener('mousedown',function(e){
+            if(e.target===hc2) return;
+            dragging=true;
+            hdr2.style.cursor='grabbing';
+            var rect=box2.getBoundingClientRect();
+            startX=e.clientX; startY=e.clientY;
+            origLeft=rect.left; origTop=rect.top;
+            box2.style.transform='none';
+            box2.style.left=origLeft+'px';
+            box2.style.top=origTop+'px';
+        });
+        document.addEventListener('mousemove',function(e){
+            if(!dragging) return;
+            box2.style.left=(origLeft+e.clientX-startX)+'px';
+            box2.style.top=(origTop+e.clientY-startY)+'px';
+        });
+        document.addEventListener('mouseup',function(){
+            dragging=false;
+            hdr2.style.cursor='grab';
+        });
+    })();
 
     var body2=document.createElement('div');
     body2.style.cssText='overflow-y:auto;flex:1;padding:16px 20px;';
     body2.innerHTML='<div style="color:#aaa;text-align:center;padding:30px;font-size:13px;">Загружаю...</div>';
     box2.appendChild(body2);
-    ov2.appendChild(box2);
+    // box2 уже добавлен в document.body выше
 
     // Загружаем пополнения за период смены
     var sinceTs = s.openedAt;
@@ -1207,7 +1270,7 @@ function showShiftDeposits(s){
     });
 
     document.addEventListener('keydown',function eh2(e){
-        if(e.key==='Escape'){ov2.remove();document.removeEventListener('keydown',eh2);}
+        if(e.key==='Escape'){box2.remove();document.removeEventListener('keydown',eh2);}
     });
 }
 
@@ -1220,7 +1283,10 @@ function showModal(){
     _modal.style.display='flex';
     _overlay.style.display='block';
     _isOpen=true;
-    setTimeout(function(){applyModalBlur(_modal,true);},50);
+    setTimeout(function(){
+        applyModalBlur(_modal,true);
+        updateBtnBlurState();
+    },50);
 }
 function hideModal(){
     if(!_modal) return;
@@ -1269,13 +1335,16 @@ function createBtn(){
     if(!erpBtn) return;
 
     // Сжимаем ERP-кнопку: узкая, та же высота
-    erpBtn.style.setProperty('flex', '0 0 56px', 'important');
-    erpBtn.style.setProperty('width', '56px', 'important');
+    erpBtn.style.setProperty('flex', '0 0 72px', 'important');
+    erpBtn.style.setProperty('width', '72px', 'important');
     erpBtn.style.setProperty('min-width', '0', 'important');
-    erpBtn.style.setProperty('padding', '0 8px', 'important');
-    erpBtn.style.setProperty('font-size', '11px', 'important');
-    erpBtn.style.setProperty('white-space', 'nowrap', 'important');
-    erpBtn.style.setProperty('overflow', 'hidden', 'important');
+    erpBtn.style.setProperty('padding', '4px 6px', 'important');
+    erpBtn.style.setProperty('font-size', '10px', 'important');
+    erpBtn.style.setProperty('white-space', 'normal', 'important');
+    erpBtn.style.setProperty('word-break', 'break-word', 'important');
+    erpBtn.style.setProperty('text-align', 'center', 'important');
+    erpBtn.style.setProperty('line-height', '1.2', 'important');
+    erpBtn.style.setProperty('overflow', 'visible', 'important');
     erpBtn.removeAttribute('data-block');
 
     // Обёртка — заменяет erpBtn визуально, но erpBtn остаётся в DOM
