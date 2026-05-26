@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      3.7
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1197,7 +1197,7 @@ function showShiftDeposits(s){
     // Модалка пополнений — перетаскиваемая, без затемнения фона
     var box2=document.createElement('div');
     box2.id='gcb-deposits-box';
-    box2.style.cssText='position:fixed;top:10%;left:50%;transform:translateX(-50%);z-index:100002;background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.35);';
+    box2.style.cssText='position:fixed;top:0;left:0;z-index:100002;background:#fff;border-radius:12px;width:560px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.35);';
     document.body.appendChild(box2);
 
     var hdr2=document.createElement('div');
@@ -1226,42 +1226,49 @@ function showShiftDeposits(s){
         box2._closeOnOut = closeOnOut; // сохраняем для Escape
     }, 200);
 
-    // Перетаскивание за шапку — через requestAnimationFrame для плавности
+    // Перетаскивание — Pointer Events API + transform3d + rAF для максимальной плавности
     (function(){
-        var dragging=false, curX=0, curY=0, rafId=null;
-        box2.style.willChange='transform';
-        // Начальное положение через translate для плавности
-        var initLeft = (window.innerWidth - 560) / 2;
+        // Начальное положение
+        var initLeft = Math.round((window.innerWidth - 560) / 2);
         var initTop  = Math.round(window.innerHeight * 0.10);
-        box2.style.left='0'; box2.style.top='0'; box2.style.transform='none';
-        box2.style.left=initLeft+'px'; box2.style.top=initTop+'px';
+        // Используем translate3d — GPU-слой, никаких layout reflows
+        box2.style.position='fixed';
+        box2.style.left='0';
+        box2.style.top='0';
+        box2.style.transform='translate3d('+initLeft+'px,'+initTop+'px,0)';
+        box2.style.willChange='transform';
+        box2.style.transformOrigin='top left';
 
-        hdr2.addEventListener('mousedown',function(e){
-            if(e.target===hc2) return;
+        var tx=initLeft, ty=initTop; // текущая позиция в px
+        var rafId=null;
+
+        hdr2.addEventListener('pointerdown',function(e){
+            if(e.target===hc2||e.button!==0) return;
             e.preventDefault();
-            dragging=true;
+            hdr2.setPointerCapture(e.pointerId);
             hdr2.style.cursor='grabbing';
-            var rect=box2.getBoundingClientRect();
-            curX=rect.left; curY=rect.top;
-            box2.style.left=curX+'px'; box2.style.top=curY+'px';
-            var lastMX=e.clientX, lastMY=e.clientY;
+            var startX=e.clientX, startY=e.clientY;
+            var startTx=tx, startTy=ty;
+
             function onMove(ev){
-                if(!dragging) return;
-                curX+=ev.clientX-lastMX; curY+=ev.clientY-lastMY;
-                lastMX=ev.clientX; lastMY=ev.clientY;
+                var dx=ev.clientX-startX;
+                var dy=ev.clientY-startY;
+                tx=startTx+dx; ty=startTy+dy;
                 if(rafId) cancelAnimationFrame(rafId);
                 rafId=requestAnimationFrame(function(){
-                    box2.style.left=curX+'px';
-                    box2.style.top=curY+'px';
+                    box2.style.transform='translate3d('+tx+'px,'+ty+'px,0)';
                 });
             }
             function onUp(){
-                dragging=false; hdr2.style.cursor='grab';
-                document.removeEventListener('mousemove',onMove);
-                document.removeEventListener('mouseup',onUp);
+                hdr2.style.cursor='grab';
+                hdr2.removeEventListener('pointermove',onMove);
+                hdr2.removeEventListener('pointerup',onUp);
+                hdr2.removeEventListener('pointercancel',onUp);
+                if(rafId){cancelAnimationFrame(rafId);rafId=null;}
             }
-            document.addEventListener('mousemove',onMove);
-            document.addEventListener('mouseup',onUp);
+            hdr2.addEventListener('pointermove',onMove);
+            hdr2.addEventListener('pointerup',onUp);
+            hdr2.addEventListener('pointercancel',onUp);
         });
     })();
 
@@ -1413,7 +1420,7 @@ function createBtn(){
     var btn = document.createElement('button');
     btn.id = 'godji-cashbox-btn';
     btn.type = 'button';
-    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 12px;height:54px;cursor:pointer;font-family:inherit;overflow:hidden;box-sizing:border-box;transition:background 0.15s;';
+    btn.style.cssText = 'flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:rgba(22,101,52,0.85);border:none;border-radius:6px;padding:0 12px;height:54px;cursor:pointer;font-family:inherit;box-sizing:border-box;transition:background 0.15s;';
     btn.addEventListener('mouseenter', function(){ btn.style.background='rgba(22,101,52,1)'; });
     btn.addEventListener('mouseleave', function(){ btn.style.background='rgba(22,101,52,0.85)'; });
 
@@ -1427,15 +1434,15 @@ function createBtn(){
     ico.appendChild(dot);
 
     var textWrap = document.createElement('div');
-    textWrap.style.cssText = 'display:flex;flex-direction:column;min-width:0;overflow:hidden;flex:1;';
+    textWrap.style.cssText = 'display:flex;flex-direction:column;min-width:0;flex:1;';
 
     var lbl = document.createElement('span');
-    lbl.style.cssText = 'font-size:14px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
+    lbl.style.cssText = 'font-size:14px;font-weight:700;color:#fff;white-space:nowrap;line-height:1.2;';
     lbl.textContent = 'Касса смены';
 
     var sumEl = document.createElement('span');
     sumEl.className = 'gcb-sum';
-    sumEl.style.cssText = 'font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;margin-top:2px;color:rgba(255,255,255,0.4);';
+    sumEl.style.cssText = 'font-size:12px;font-weight:600;white-space:nowrap;line-height:1.2;margin-top:2px;color:rgba(255,255,255,0.4);';
 
     textWrap.appendChild(lbl);
     textWrap.appendChild(sumEl);
