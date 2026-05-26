@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -1262,21 +1262,24 @@ function updateBtnBadge(){
 }
 
 function createBtn(){
-    if(document.getElementById('godji-cashbox-btn')) return;
+    // Если строка уже вставлена — выходим
+    if(document.getElementById('godji-cashbox-row')) return;
     var paper = document.querySelector('.Shifts_shiftsPaper__9Jml_');
     if(!paper) return;
 
-    // Оригинальная ERP-кнопка (filled, block) — она должна остаться на месте в DOM
+    // Ищем ERP-кнопку смены в любом месте paper
     var erpBtn = paper.querySelector('button[data-variant="filled"]');
     if(!erpBtn) return;
 
-    // Сжимаем ERP-кнопку до узкой полоски справа
-    // flex: 0 0 auto + фиксированная ширина ~64px
-    erpBtn.style.cssText += ';flex:0 0 64px!important;width:64px!important;min-width:0!important;padding:0 6px!important;font-size:11px!important;white-space:nowrap!important;overflow:hidden!important;';
+    // Сжимаем ERP-кнопку: узкая, та же высота
+    erpBtn.style.setProperty('flex', '0 0 72px', 'important');
+    erpBtn.style.setProperty('width', '72px', 'important');
+    erpBtn.style.setProperty('min-width', '0', 'important');
+    erpBtn.style.setProperty('padding', '0 8px', 'important');
+    erpBtn.style.setProperty('font-size', '11px', 'important');
+    erpBtn.style.setProperty('white-space', 'nowrap', 'important');
+    erpBtn.style.setProperty('overflow', 'hidden', 'important');
     erpBtn.removeAttribute('data-block');
-
-    // Если row уже есть — не создаём снова
-    if(document.getElementById('godji-cashbox-row')) return;
 
     // Обёртка — заменяет erpBtn визуально, но erpBtn остаётся в DOM
     // Оборачиваем erpBtn в flex-контейнер, добавляя нашу кнопку слева
@@ -1323,21 +1326,23 @@ function createBtn(){
         if(_isOpen) hideModal(); else showModal();
     });
 
-    // Вставляем row перед erpBtn (не перемещаем erpBtn — React его не трогает)
-    paper.insertBefore(row, erpBtn);
+    // erpBtn может быть не прямым дочерним paper — вставляем через его родителя
+    var erpParent = erpBtn.parentNode;
+    if(!erpParent) return;
+    erpParent.insertBefore(row, erpBtn);
     row.appendChild(btn);
-    // Переносим erpBtn ВНУТРЬ row — он остаётся в DOM paper через row
     row.appendChild(erpBtn);
-    // Выравниваем высоту ERP кнопки под нашу
+    // Одинаковая высота
     erpBtn.style.height = '36px';
     erpBtn.style.alignSelf = 'stretch';
+    erpBtn.style.boxSizing = 'border-box';
 
     updateBtnBadge();
 }
 
 // ── MutationObserver + init ───────────────────────────────
 var _obs = new MutationObserver(function(){
-    if(!document.getElementById('godji-cashbox-btn')) createBtn();
+    if(!document.getElementById('godji-cashbox-row')) createBtn();
 });
 
 function initObservers(){
