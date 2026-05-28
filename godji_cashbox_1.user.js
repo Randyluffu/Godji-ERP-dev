@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — Касса смены
 // @namespace    http://tampermonkey.net/
-// @version      3.12
+// @version      3.19
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @updateURL    https://raw.githubusercontent.com/Randyluffu/Godji-ERP/main/godji_cashbox.user.js
@@ -15,7 +15,15 @@
 // ── Блюр сумм ─────────────────────────────────────────────
 var _valuesHidden = true;
 // _blurDisabled сохраняется до закрытия смены (в localStorage), сбрасывается при открытии новой
-var GCB_BLUR_KEY = 'godji_cashbox_blur_off';
+var GCB_BLUR_KEY   = 'godji_cashbox_blur_off';
+var GCB_ADMINS_KEY = 'godji_cashbox_admins';
+
+function loadAdmins(){
+    try{ var a=JSON.parse(localStorage.getItem(GCB_ADMINS_KEY)||'[]'); return Array.isArray(a)?a:[]; }catch(e){return [];}
+}
+function saveAdmins(arr){
+    try{ localStorage.setItem(GCB_ADMINS_KEY, JSON.stringify(arr)); }catch(e){}
+}
 var _blurDisabled = (function(){ try{ return localStorage.getItem(GCB_BLUR_KEY)==='1'; }catch(e){return false;} })();
 
 // Применяет/снимает блюр на все [data-cashval] внутри container.
@@ -241,13 +249,15 @@ function onApi(reqBody, data){
        op.indexOf('OpenShift') !== -1 || op.indexOf('StartShift') !== -1){
         if(!loadCurrent()){
             var s2 = d.openShift || d.createShift || d.startShift || {};
-            var newShift={id: s2.id||('s_'+Date.now()), openedAt:Date.now(), openedBy:'erp',
-                         cash:0, card:0, manual:0, withdrawal:0, manualEntries:[],
-                         seenOpIds:[]};
-            saveCurrent(newShift);
-            // Инициализируем maxSeenId
-            initMaxId(newShift, function(){ saveCurrent(newShift); });
-            updateBtnBadge(); updateModalIfOpen();
+            pickAdminAndOpen(function(nick){
+                var newShift={id: s2.id||('s_'+Date.now()), openedAt:Date.now(), openedBy:'erp',
+                             adminNick: nick,
+                             cash:0, card:0, manual:0, withdrawal:0, manualEntries:[],
+                             seenOpIds:[]};
+                saveCurrent(newShift);
+                initMaxId(newShift, function(){ saveCurrent(newShift); });
+                updateBtnBadge(); updateModalIfOpen();
+            });
         }
     }
 
@@ -420,7 +430,7 @@ function showShiftOpenPopup(){
         '</div>';
     document.body.appendChild(pop);
     document.getElementById('gcb-pop-open').addEventListener('click', function(){
-        openShiftManual(); pop.remove(); updateBtnBadge(); updateModalIfOpen();
+        pickAdminAndOpen(function(nick){ openShiftManual(nick); pop.remove(); updateBtnBadge(); updateModalIfOpen(); });
     });
     document.getElementById('gcb-pop-close').addEventListener('click', function(){ pop.remove(); });
     // Автоскрытие через 30 сек
@@ -469,11 +479,14 @@ function watchShiftBtn(){
                 // Нажата "Открыть смену" — ждём 1.5 сек, затем синхронизируем кассу
                 setTimeout(function(){
                     if(!loadCurrent()){
-                        var shift = {id:'s_'+Date.now(), openedAt:Date.now(), openedBy:'erp',
-                                     cash:0, card:0, manual:0, withdrawal:0, manualEntries:[], seenOpIds:[]};
-                        saveCurrent(shift);
-                        initMaxId(shift, function(){ saveCurrent(shift); });
-                        updateBtnBadge(); updateModalIfOpen();
+                        pickAdminAndOpen(function(nick){
+                            var shift = {id:'s_'+Date.now(), openedAt:Date.now(), openedBy:'erp',
+                                         adminNick: nick,
+                                         cash:0, card:0, manual:0, withdrawal:0, manualEntries:[], seenOpIds:[]};
+                            saveCurrent(shift);
+                            initMaxId(shift, function(){ saveCurrent(shift); });
+                            updateBtnBadge(); updateModalIfOpen();
+                        });
                     }
                 }, 1500);
             } else if(txt.indexOf('закрыт') !== -1 && txt.indexOf('смен') !== -1){
@@ -520,14 +533,55 @@ function closeShift(shift, source){
     updateBtnBadge(); updateModalIfOpen();
 }
 
-function openShiftManual(){
+function openShiftManual(adminNick){
     if(loadCurrent()) return;
     var shift={id:'s_'+Date.now(),openedAt:Date.now(),openedBy:'manual',
+               adminNick: adminNick||'',
                cash:0,card:0,manual:0,withdrawal:0,manualEntries:[],seenOpIds:[]};
     saveCurrent(shift);
-    // Инициализируем maxSeenId чтобы не тащить историю
     initMaxId(shift, function(){ saveCurrent(shift); });
     updateBtnBadge(); updateModalIfOpen();
+}
+
+// Выбор админа перед открытием смены
+function pickAdminAndOpen(onPicked){
+    var admins = loadAdmins();
+    if(!admins.length){
+        // Нет админов — предлагаем добавить
+        var nick = prompt('Нет добавленных админов.\nВведите ник первого админа:','');
+        if(!nick||!nick.trim()) return;
+        nick = nick.trim();
+        admins.push(nick); saveAdmins(admins);
+    }
+    if(admins.length === 1){
+        onPicked(admins[0]); return;
+    }
+    // Модалка выбора
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:100010;display:flex;align-items:center;justify-content:center;';
+    var box=document.createElement('div');
+    box.style.cssText='background:#fff;border-radius:12px;width:320px;padding:20px;box-shadow:0 8px 40px rgba(0,0,0,0.3);font-family:inherit;';
+    var title=document.createElement('div');
+    title.style.cssText='font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:14px;';
+    title.textContent='Кто открывает смену?';
+    box.appendChild(title);
+    admins.forEach(function(nick){
+        var btn=document.createElement('button');
+        btn.style.cssText='display:block;width:100%;text-align:left;padding:10px 14px;margin-bottom:6px;background:#f4f4f4;border:1px solid #e8e8e8;border-radius:8px;font-size:13px;font-weight:600;color:#1a1a1a;cursor:pointer;font-family:inherit;transition:background 0.1s;';
+        btn.textContent=nick;
+        btn.addEventListener('mouseenter',function(){btn.style.background='#e8f5e9';btn.style.borderColor='#bbf7d0';});
+        btn.addEventListener('mouseleave',function(){btn.style.background='#f4f4f4';btn.style.borderColor='#e8e8e8';});
+        btn.addEventListener('click',function(){ ov.remove(); onPicked(nick); });
+        box.appendChild(btn);
+    });
+    var cancelBtn=document.createElement('button');
+    cancelBtn.style.cssText='display:block;width:100%;text-align:center;padding:8px;background:none;border:none;font-size:12px;color:#aaa;cursor:pointer;font-family:inherit;margin-top:4px;';
+    cancelBtn.textContent='Отмена';
+    cancelBtn.addEventListener('click',function(){ov.remove();});
+    box.appendChild(cancelBtn);
+    ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+    ov.appendChild(box); document.body.appendChild(ov);
+    document.addEventListener('keydown',function eh(e){if(e.key==='Escape'){ov.remove();document.removeEventListener('keydown',eh);}});
 }
 
 // ── Модалка ───────────────────────────────────────────────
@@ -535,7 +589,7 @@ var _modal=null, _overlay=null, _isOpen=false, _tab='current';
 
 function buildModal(){
     _overlay=document.createElement('div');
-    _overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99997;display:none;pointer-events:auto;';
+    _overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:99997;display:none;pointer-events:auto;overscroll-behavior:contain;';
     _overlay.addEventListener('click',hideModal);
     document.body.appendChild(_overlay);
 
@@ -575,6 +629,13 @@ function renderModal(){
         tBadge.style.cssText='font-size:18px;font-weight:800;color:#1a1a1a;margin-left:2px;';
         tBadge.textContent=fmtAmtAbs(total);
         attachBlurHover(tBadge);
+        // Ник админа рядом с суммой в шапке
+        if(shift && shift.adminNick){
+            var adminSpan=document.createElement('span');
+            adminSpan.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:700;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;padding:2px 10px;margin-right:8px;white-space:nowrap;';
+            adminSpan.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'+shift.adminNick;
+            tw.appendChild(adminSpan);
+        }
         // Кнопка глаза (hover-блюр вкл/выкл)
         var hdrEye=document.createElement('button');
         hdrEye.style.cssText='background:none;border:none;cursor:pointer;color:#bbb;padding:2px 4px;display:flex;align-items:center;margin-left:4px;transition:color 0.15s;';
@@ -654,7 +715,7 @@ function renderModal(){
     _modal.appendChild(tabs);
 
     var body=document.createElement('div');
-    body.style.cssText='overflow-y:auto;flex:1;min-height:0;';
+    body.style.cssText='overflow-y:auto;overscroll-behavior:contain;flex:1;min-height:0;';
     _modal.appendChild(body);
 
     if(_tab==='current') renderCurrentTab(body, shift);
@@ -883,7 +944,7 @@ function renderCurrentTab(body, shift){
         openBtn.style.cssText='padding:10px 24px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:7px;';
         openBtn.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Открыть смену вручную';
         openBtn.addEventListener('click',function(){
-            openShiftManual();
+            pickAdminAndOpen(function(nick){ openShiftManual(nick); updateBtnBadge(); updateModalIfOpen(); });
             renderModal();
         });
 
@@ -921,6 +982,7 @@ function renderCurrentTab(body, shift){
         val.setAttribute('data-cashval','1');
         val.style.cssText='font-size:22px;font-weight:800;color:#1a1a1a;';
         val.textContent=value;
+        attachBlurHover(val);
         c.appendChild(top); c.appendChild(val);
         return c;
     }
@@ -956,6 +1018,7 @@ function renderCurrentTab(body, shift){
     var infoR=document.createElement('div');
     infoR.style.cssText='font-size:15px;font-weight:800;color:#1a1a1a;';
     infoR.setAttribute('data-cashval','1');
+    attachBlurHover(infoR);
     infoR.textContent='В кассе: '+fmtAmtAbs(total);
     infoRow.appendChild(infoL); infoRow.appendChild(infoR);
     body.appendChild(infoRow);
@@ -1047,59 +1110,392 @@ function renderCurrentTab(body, shift){
     dbgBtn.addEventListener('mouseleave',function(){dbgBtn.style.color='#bbb';dbgBtn.style.borderColor='#e0e0e0';dbgBtn.style.background='#f5f5f5';});
     dbgBtn.addEventListener('click',function(){ runCashboxDebug(); });
 
+    // Кнопка списка админов — цветная с текстом, прижата вправо
+    var admBtn=document.createElement('button');
+    admBtn.style.cssText='margin-left:auto;display:flex;align-items:center;gap:6px;padding:7px 13px;height:32px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;cursor:pointer;color:#1d4ed8;font-size:12px;font-weight:700;font-family:inherit;transition:all 0.15s;flex-shrink:0;white-space:nowrap;';
+    admBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Список админов';
+    admBtn.addEventListener('mouseenter',function(){admBtn.style.background='#dbeafe';admBtn.style.borderColor='#93c5fd';});
+    admBtn.addEventListener('mouseleave',function(){admBtn.style.background='#eff6ff';admBtn.style.borderColor='#bfdbfe';});
+    admBtn.addEventListener('click',function(){ showAdminList(); });
+
     actions.appendChild(closeBtn);
     actions.appendChild(dbgBtn);
+    actions.appendChild(admBtn);
     body.appendChild(actions);
+}
+
+// ── Список админов ───────────────────────────────────────
+function showAdminList(){
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100010;display:flex;align-items:center;justify-content:center;';
+    ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+    var box=document.createElement('div');
+    box.style.cssText='background:#fff;border-radius:12px;width:320px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.25);font-family:inherit;';
+    var hdr=document.createElement('div');
+    hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #f0f0f0;flex-shrink:0;';
+    var ht=document.createElement('span'); ht.style.cssText='font-size:13px;font-weight:700;color:#1a1a1a;'; ht.textContent='Список админов';
+    var hc=document.createElement('button'); hc.style.cssText='background:none;border:none;font-size:18px;cursor:pointer;color:#bbb;line-height:1;'; hc.textContent='×'; hc.addEventListener('click',function(){ov.remove();});
+    hdr.appendChild(ht); hdr.appendChild(hc); box.appendChild(hdr);
+
+    function renderList(){
+        var listWrap=box.querySelector('.gcb-adm-list');
+        if(listWrap) listWrap.remove();
+        var wrap=document.createElement('div'); wrap.className='gcb-adm-list';
+        wrap.style.cssText='overflow-y:auto;flex:1;padding:10px 12px;';
+        var admins=loadAdmins();
+        if(!admins.length){
+            wrap.innerHTML='<div style="color:#ccc;text-align:center;padding:24px;font-size:13px;">Нет добавленных админов</div>';
+        } else {
+            admins.forEach(function(nick){
+                var row=document.createElement('div');
+                row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-radius:7px;margin-bottom:4px;background:#f7f7f7;';
+                var nm=document.createElement('span'); nm.style.cssText='font-size:13px;font-weight:600;color:#1a1a1a;'; nm.textContent=nick;
+                row.appendChild(nm);
+                wrap.appendChild(row);
+            });
+        }
+        // Кнопка добавить
+        var addRow=document.createElement('div'); addRow.style.cssText='padding:6px 0 2px;';
+        var addBtn=document.createElement('button');
+        addBtn.style.cssText='width:100%;padding:9px;background:#f0fdf4;border:1px dashed #86efac;border-radius:7px;color:#166534;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.1s;';
+        addBtn.textContent='+ Добавить админа';
+        addBtn.addEventListener('click',function(){
+            var nick=prompt('Введите ник нового админа:','');
+            if(!nick||!nick.trim()) return;
+            nick=nick.trim();
+            var admins=loadAdmins();
+            if(admins.indexOf(nick)!==-1){ alert('Такой админ уже есть'); return; }
+            admins.push(nick); saveAdmins(admins);
+            renderList();
+        });
+        addRow.appendChild(addBtn); wrap.appendChild(addRow);
+        box.appendChild(wrap);
+    }
+    renderList();
+    ov.appendChild(box); document.body.appendChild(ov);
+    document.addEventListener('keydown',function eh(e){if(e.key==='Escape'){ov.remove();document.removeEventListener('keydown',eh);}});
 }
 
 // ── Журнал смен ───────────────────────────────────────────
 function renderHistoryTab(body){
-    var shifts=loadShifts();
-    if(!shifts.length){
+    var allShifts=loadShifts();
+    if(!allShifts.length){
         body.innerHTML='<div style="text-align:center;color:#ccc;padding:60px;font-size:14px;">Нет завершённых смен</div>';
         return;
     }
 
+    var _fAdmin='', _fFrom=null, _fTill=null, _sortOpen=0, _sortClose=0, _sortTotal=0;
+    // _sortX: 0=off, 1=desc, 2=asc
+
+    var adminNicks=[];
+    allShifts.forEach(function(s){ if(s.adminNick&&adminNicks.indexOf(s.adminNick)===-1) adminNicks.push(s.adminNick); });
+
+    // ── Шапка с кнопкой "Сбросить фильтры" ──
+    var topBar=document.createElement('div');
+    topBar.style.cssText='display:flex;align-items:center;justify-content:flex-end;padding:6px 12px 0;flex-shrink:0;';
+    var rstBtn=document.createElement('button');
+    rstBtn.textContent='Сбросить фильтры';
+    rstBtn.style.cssText='font-size:11px;padding:4px 10px;border:1px solid #ddd;border-radius:5px;background:#fff;color:#888;cursor:pointer;font-family:inherit;transition:background 0.1s;';
+    rstBtn.addEventListener('mouseenter',function(){rstBtn.style.background='#f5f5f5';});
+    rstBtn.addEventListener('mouseleave',function(){rstBtn.style.background='#fff';});
+    rstBtn.addEventListener('click',function(){
+        _fAdmin=''; _fFrom=null; _fTill=null; _sortOpen=0; _sortClose=0; _sortTotal=0;
+        updateThLabels(); applyFilters();
+    });
+    topBar.appendChild(rstBtn);
+    body.appendChild(topBar);
+
+    // ── Таблица ──
+    var tableWrap=document.createElement('div');
+    tableWrap.style.cssText='overflow:auto;flex:1;overscroll-behavior:contain;';
+    body.appendChild(tableWrap);
+
     var table=document.createElement('table');
-    table.style.cssText='width:100%;border-collapse:collapse;font-size:13px;';
+    table.style.cssText='width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;';
+    tableWrap.appendChild(table);
+
+    // ── Thead ──
     var thead=document.createElement('thead');
-    thead.style.cssText='position:sticky;top:0;background:#f9f9f9;z-index:1;';
+    thead.style.cssText='position:sticky;top:0;background:#f9f9f9;z-index:2;';
+    table.appendChild(thead);
+
+    var ICON_N='\u25be', ICON_D='\u25bc', ICON_A='\u25b2';
+    var THS='padding:9px 8px;text-align:center;color:#888;font-weight:600;font-size:11px;border-bottom:2px solid #eee;white-space:nowrap;text-transform:uppercase;letter-spacing:0.3px;user-select:none;overflow:hidden;';
+
     var hr=document.createElement('tr');
-    [['Открыта','115px'],['Закрыта','115px'],['Нал.','75px'],['Карта','75px'],['Внес.','70px'],['Выем.','70px'],['Спис.','70px'],['В кассе','80px']].forEach(function(c){
-        var th=document.createElement('th');
-        th.style.cssText='padding:9px 12px;text-align:left;color:#888;font-weight:600;font-size:11px;border-bottom:2px solid #eee;white-space:nowrap;width:'+c[1]+';text-transform:uppercase;letter-spacing:0.3px;';
-        th.textContent=c[0]; hr.appendChild(th);
-    });
-    thead.appendChild(hr); table.appendChild(thead);
+    var thEls={};
 
-    var tbody=document.createElement('tbody');
-    shifts.forEach(function(s){
-        var tr=document.createElement('tr');
-        tr.style.cssText='border-bottom:1px solid #f5f5f5;cursor:pointer;';
-        tr.addEventListener('mouseenter',function(){tr.style.background='#f7f9ff';});
-        tr.addEventListener('mouseleave',function(){tr.style.background='';});
-        tr.addEventListener('click',function(){ showShiftDetail(s); });
+    // Mini calendar dropdown
+    function makeCalendarDropdown(onSelect){
+        var now=new Date();
+        var viewY=now.getFullYear(), viewM=now.getMonth();
+        var dropdown=document.createElement('div');
+        dropdown.style.cssText='position:absolute;top:calc(100% + 2px);left:50%;transform:translateX(-50%);background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.14);z-index:30;padding:10px;min-width:220px;font-family:inherit;';
+        dropdown.addEventListener('click',function(e){e.stopPropagation();});
 
-        var total=(s.cash||0)+(s.card||0)+(s.manual||0)-(s.withdrawal||0)-(s.debit||0);
-        [
-            [fmtDate(s.openedAt),                'color:#555;'],
-            [s.closedAt?fmtDate(s.closedAt):'—', 'color:#999;'],
-            [fmtAmtAbs(s.cash),                  'color:#166534;font-weight:600;'],
-            [fmtAmtAbs(s.card),                  'color:#1d4ed8;font-weight:600;'],
-            [fmtAmtAbs(s.manual),                'color:#7c3aed;font-weight:600;'],
-            [fmtAmtAbs(s.withdrawal),            'color:#b45309;font-weight:600;'],
-            [fmtAmtAbs(s.debit||0),              'color:#991b1b;font-weight:600;'],
-            [fmtAmtAbs(total),                   'font-weight:800;color:#1a1a1a;font-size:14px;'],
-        ].forEach(function(col){
-            var td=document.createElement('td');
-            td.style.cssText='padding:9px 12px;font-size:12px;white-space:nowrap;'+col[1]; if(col[1].indexOf('font-size:14px')!==-1) td.style.fontSize='14px';
-            td.textContent=col[0]; tr.appendChild(td);
+        // Ручной ввод
+        var inputRow=document.createElement('div'); inputRow.style.cssText='display:flex;gap:4px;margin-bottom:8px;';
+        var manualIn=document.createElement('input'); manualIn.type='text'; manualIn.placeholder='ДД.ММ.ГГГГ';
+        manualIn.style.cssText='flex:1;font-size:11px;padding:4px 7px;border:1px solid #ddd;border-radius:5px;font-family:inherit;';
+        var manualOk=document.createElement('button'); manualOk.textContent='OK';
+        manualOk.style.cssText='font-size:11px;padding:4px 8px;border:1px solid #86efac;border-radius:5px;background:#f0fdf4;color:#166534;cursor:pointer;font-family:inherit;font-weight:600;';
+        manualOk.addEventListener('click',function(){
+            var parts=manualIn.value.split('.');
+            if(parts.length===3){
+                var d=new Date(+parts[2],+parts[1]-1,+parts[0]);
+                if(!isNaN(d.getTime())){ onSelect(d); dropdown.remove(); return; }
+            }
+            manualIn.style.borderColor='#f87171';
         });
-        tbody.appendChild(tr);
+        inputRow.appendChild(manualIn); inputRow.appendChild(manualOk);
+        dropdown.appendChild(inputRow);
+
+        function buildCal(){
+            var old=dropdown.querySelector('.gcb-cal'); if(old) old.remove();
+            var cal=document.createElement('div'); cal.className='gcb-cal';
+            // Nav
+            var nav=document.createElement('div'); nav.style.cssText='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
+            var prev=document.createElement('button'); prev.textContent='◀'; prev.style.cssText='background:none;border:none;cursor:pointer;font-size:12px;color:#555;padding:2px 6px;';
+            var next=document.createElement('button'); next.textContent='▶'; next.style.cssText='background:none;border:none;cursor:pointer;font-size:12px;color:#555;padding:2px 6px;';
+            var lbl=document.createElement('span'); lbl.style.cssText='font-size:12px;font-weight:700;color:#333;';
+            var MONTHS=['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+            lbl.textContent=MONTHS[viewM]+' '+viewY;
+            prev.addEventListener('click',function(){ viewM--; if(viewM<0){viewM=11;viewY--;} buildCal(); });
+            next.addEventListener('click',function(){ viewM++; if(viewM>11){viewM=0;viewY++;} buildCal(); });
+            nav.appendChild(prev); nav.appendChild(lbl); nav.appendChild(next); cal.appendChild(nav);
+            // Days header
+            var dHdr=document.createElement('div'); dHdr.style.cssText='display:grid;grid-template-columns:repeat(7,1fr);gap:1px;margin-bottom:2px;';
+            ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(function(d){
+                var c=document.createElement('div'); c.style.cssText='font-size:9px;text-align:center;color:#bbb;font-weight:600;'; c.textContent=d; dHdr.appendChild(c);
+            });
+            cal.appendChild(dHdr);
+            // Days grid
+            var grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(7,1fr);gap:2px;';
+            var first=new Date(viewY,viewM,1).getDay(); // 0=Sun
+            var offset=(first===0)?6:first-1;
+            var days=new Date(viewY,viewM+1,0).getDate();
+            for(var i=0;i<offset;i++){ var empty=document.createElement('div'); grid.appendChild(empty); }
+            for(var day=1;day<=days;day++){
+                (function(d){
+                    var cell=document.createElement('div');
+                    cell.style.cssText='font-size:11px;text-align:center;padding:3px 2px;border-radius:5px;cursor:pointer;color:#333;transition:background 0.1s;';
+                    cell.textContent=d;
+                    cell.addEventListener('mouseenter',function(){cell.style.background='#eff6ff';cell.style.color='#1d4ed8';});
+                    cell.addEventListener('mouseleave',function(){cell.style.background='';cell.style.color='#333';});
+                    cell.addEventListener('click',function(){
+                        onSelect(new Date(viewY,viewM,d));
+                        dropdown.remove();
+                    });
+                    grid.appendChild(cell);
+                })(day);
+            }
+            cal.appendChild(grid); dropdown.appendChild(cal);
+        }
+        buildCal();
+        return dropdown;
+    }
+
+    function makeFilterTh(label, sortVar, onSortChange, onDateSelect, dateVal){
+        var th=document.createElement('th');
+        th.style.cssText=THS+'cursor:pointer;position:relative;width:110px;';
+        function getIcon(v){ return v===0?ICON_N:v===1?ICON_D:ICON_A; }
+        function render(){
+            var dateStr=dateVal()?(' <span style="font-size:9px;color:#1d4ed8;">'+dateVal().toLocaleDateString('ru-RU')+'</span>'):'';
+            th.innerHTML=label+' <span style="font-size:9px;opacity:0.7;">'+getIcon(sortVar())+'</span>'+dateStr;
+        }
+        render();
+        var calDrop=null;
+        th.addEventListener('click',function(e){
+            e.stopPropagation();
+            if(calDrop){ calDrop.remove(); calDrop=null; return; }
+            // Первый клик = цикл сортировки, второй (если уже открыт) = закрыть
+            // Правый клик или shift-клик = открыть календарь
+            if(e.shiftKey||e.altKey){
+                // Открыть календарь
+                calDrop=makeCalendarDropdown(function(date){
+                    onDateSelect(date); render(); applyFilters();
+                });
+                th.appendChild(calDrop);
+                setTimeout(function(){
+                    document.addEventListener('click',function cl(){
+                        if(calDrop)calDrop.remove(); calDrop=null;
+                        document.removeEventListener('click',cl);
+                    });
+                },10);
+            } else {
+                onSortChange(); render(); applyFilters();
+            }
+        });
+        // Двойной клик = открыть календарь
+        th.addEventListener('dblclick',function(e){
+            e.stopPropagation();
+            if(calDrop){ calDrop.remove(); calDrop=null; return; }
+            calDrop=makeCalendarDropdown(function(date){
+                onDateSelect(date); render(); applyFilters();
+            });
+            th.appendChild(calDrop);
+            setTimeout(function(){
+                document.addEventListener('click',function cl(){
+                    if(calDrop)calDrop.remove(); calDrop=null;
+                    document.removeEventListener('click',cl);
+                });
+            },10);
+        });
+        return {th:th, render:render};
+    }
+
+    function updateThLabels(){
+        thEls.open&&thEls.open.render();
+        thEls.close&&thEls.close.render();
+        thEls.total&&thEls.total.render();
+        // Admin th
+        if(thEls.admin){
+            thEls.admin.innerHTML=(_fAdmin||'Админ')+' <span style="font-size:9px;opacity:0.7;">'+ICON_N+'</span>';
+        }
+    }
+
+    // Build thead row
+    thEls.open = makeFilterTh('Открыта',
+        function(){return _sortOpen;},
+        function(){_sortOpen=(_sortOpen+1)%3;_sortClose=0;_sortTotal=0;},
+        function(d){_fFrom=d;},
+        function(){return _fFrom;}
+    );
+    hr.appendChild(thEls.open.th);
+
+    // Админ ▾
+    var thAdmin=document.createElement('th'); thAdmin.style.cssText=THS+'cursor:pointer;position:relative;width:80px;';
+    thAdmin.innerHTML=(_fAdmin||'Админ')+' <span style="font-size:9px;opacity:0.7;">'+ICON_N+'</span>';
+    thEls.admin=thAdmin;
+    var admDrop=null;
+    thAdmin.addEventListener('click',function(e){
+        e.stopPropagation();
+        if(admDrop){admDrop.remove();admDrop=null;return;}
+        admDrop=document.createElement('div');
+        admDrop.style.cssText='position:absolute;top:calc(100% + 2px);left:50%;transform:translateX(-50%);background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:30;min-width:110px;padding:4px 0;font-family:inherit;';
+        admDrop.addEventListener('click',function(e2){e2.stopPropagation();});
+        function makeAdmOpt(label,val){
+            var o=document.createElement('div');
+            o.style.cssText='padding:7px 14px;font-size:12px;cursor:pointer;color:'+(_fAdmin===val?'#1d4ed8':'#333')+';font-weight:'+(_fAdmin===val?'700':'400')+';';
+            o.textContent=label;
+            o.addEventListener('mouseenter',function(){o.style.background='#f0f6ff';});
+            o.addEventListener('mouseleave',function(){o.style.background='';});
+            o.addEventListener('click',function(){_fAdmin=val;thAdmin.innerHTML=(_fAdmin||'Админ')+' <span style="font-size:9px;opacity:0.7;">'+ICON_N+'</span>';admDrop.remove();admDrop=null;applyFilters();});
+            return o;
+        }
+        admDrop.appendChild(makeAdmOpt('Все',''));
+        adminNicks.forEach(function(n){admDrop.appendChild(makeAdmOpt(n,n));});
+        thAdmin.appendChild(admDrop);
+        setTimeout(function(){document.addEventListener('click',function cl(){if(admDrop)admDrop.remove();admDrop=null;document.removeEventListener('click',cl);});},10);
     });
+    hr.appendChild(thAdmin);
+
+    thEls.close = makeFilterTh('Закрыта',
+        function(){return _sortClose;},
+        function(){_sortClose=(_sortClose+1)%3;_sortOpen=0;_sortTotal=0;},
+        function(d){_fTill=d;},
+        function(){return _fTill;}
+    );
+    hr.appendChild(thEls.close.th);
+
+    // В кассе ▾
+    var thTotal=document.createElement('th'); thTotal.style.cssText=THS+'cursor:pointer;position:relative;width:78px;';
+    function renderTotalTh(){ thTotal.innerHTML='В кассе <span style="font-size:9px;opacity:0.7;">'+(_sortTotal===0?ICON_N:_sortTotal===1?ICON_D:ICON_A)+'</span>'; }
+    renderTotalTh(); thEls.total={render:renderTotalTh};
+    thTotal.addEventListener('click',function(){_sortTotal=(_sortTotal+1)%3;_sortOpen=0;_sortClose=0;renderTotalTh();applyFilters();});
+    hr.appendChild(thTotal);
+
+    ['Нал.','Карта','Внес.','Выем.','Спис.'].forEach(function(n){
+        var th=document.createElement('th'); th.style.cssText=THS+'width:64px;'; th.textContent=n; hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+
+    // ── tbody ──
+    var tbody=document.createElement('tbody');
     table.appendChild(tbody);
-    body.appendChild(table);
+
+    function applyFilters(){
+        var shifts=allShifts.filter(function(s){
+            if(_fAdmin && s.adminNick!==_fAdmin) return false;
+            if(_fFrom){
+                var from=new Date(_fFrom); from.setHours(0,0,0,0);
+                if(s.openedAt < from.getTime()) return false;
+            }
+            if(_fTill){
+                var till=new Date(_fTill); till.setHours(23,59,59,999);
+                if(s.openedAt > till.getTime()) return false;
+            }
+            return true;
+        });
+        if(_sortOpen===1) shifts.sort(function(a,b){return b.openedAt-a.openedAt;});
+        else if(_sortOpen===2) shifts.sort(function(a,b){return a.openedAt-b.openedAt;});
+        else if(_sortClose===1) shifts.sort(function(a,b){return (b.closedAt||0)-(a.closedAt||0);});
+        else if(_sortClose===2) shifts.sort(function(a,b){return (a.closedAt||0)-(b.closedAt||0);});
+        else if(_sortTotal===1) shifts.sort(function(a,b){
+            var ta=(a.cash||0)+(a.card||0)+(a.manual||0)-(a.withdrawal||0)-(a.debit||0);
+            var tb=(b.cash||0)+(b.card||0)+(b.manual||0)-(b.withdrawal||0)-(b.debit||0);
+            return tb-ta;
+        });
+        else if(_sortTotal===2) shifts.sort(function(a,b){
+            var ta=(a.cash||0)+(a.card||0)+(a.manual||0)-(a.withdrawal||0)-(a.debit||0);
+            var tb=(b.cash||0)+(b.card||0)+(b.manual||0)-(b.withdrawal||0)-(b.debit||0);
+            return ta-tb;
+        });
+        rebuildRows(shifts);
+    }
+
+    function rebuildRows(shifts){
+        tbody.innerHTML='';
+        if(!shifts.length){
+            var empty=document.createElement('tr');
+            var etd=document.createElement('td'); etd.colSpan=9; etd.style.cssText='text-align:center;color:#ccc;padding:40px;font-size:13px;'; etd.textContent='Нет смен по выбранным фильтрам';
+            empty.appendChild(etd); tbody.appendChild(empty); return;
+        }
+        shifts.forEach(function(s){
+            var total=(s.cash||0)+(s.card||0)+(s.manual||0)-(s.withdrawal||0)-(s.debit||0);
+            var tr=document.createElement('tr');
+            tr.style.cssText='border-bottom:2px solid #d1d5db;cursor:pointer;background:#fff;transition:background 0.1s;';
+            tr.addEventListener('mouseenter',function(){tr.style.background='#f0f6ff';});
+            tr.addEventListener('mouseleave',function(){tr.style.background='#fff';});
+            tr.addEventListener('click',function(){showShiftDetail(s);});
+
+            var P='padding:8px 8px;vertical-align:middle;text-align:center;font-size:12px;white-space:nowrap;overflow:hidden;';
+
+            // Открыта — двустрочная с ником в стиле бейджа
+            var tdO=document.createElement('td'); tdO.style.cssText=P+'text-align:left;';
+            if(s.adminNick){
+                var nb=document.createElement('div');
+                nb.style.cssText='display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;padding:1px 8px;margin-bottom:3px;';
+                nb.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'+s.adminNick;
+                tdO.appendChild(nb);
+            }
+            var d1=document.createElement('div'); d1.style.cssText='font-size:11px;color:#555;'; d1.textContent=fmtDate(s.openedAt); tdO.appendChild(d1);
+            tr.appendChild(tdO);
+
+            // Админ — пустая (ник уже в "Открыта")
+            var tdA=document.createElement('td'); tdA.style.cssText=P; tr.appendChild(tdA);
+
+            // Закрыта
+            var tdC=document.createElement('td'); tdC.style.cssText=P;
+            tdC.textContent=s.closedAt?fmtDate(s.closedAt):'—'; tdC.style.color=s.closedAt?'#555':'#ccc'; tr.appendChild(tdC);
+
+            // Данные
+            [[fmtAmtAbs(total),'font-weight:800;color:#1a1a1a;font-size:13px;'],
+             [fmtAmtAbs(s.cash),'color:#166534;font-weight:600;'],
+             [fmtAmtAbs(s.card),'color:#1d4ed8;font-weight:600;'],
+             [fmtAmtAbs(s.manual),'color:#7c3aed;font-weight:600;'],
+             [fmtAmtAbs(s.withdrawal),'color:#b45309;font-weight:600;'],
+             [fmtAmtAbs(s.debit||0),'color:#991b1b;font-weight:600;'],
+            ].forEach(function(col){
+                var td=document.createElement('td'); td.style.cssText=P+col[1]; td.textContent=col[0]; tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+    applyFilters();
 }
+
 
 // ── Детальная карточка смены ──────────────────────────────
 function showShiftDetail(s){
@@ -1122,6 +1518,13 @@ function showShiftDetail(s){
     var hc=document.createElement('button');
     hc.style.cssText='background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;line-height:1;';
     hc.textContent='×'; hc.addEventListener('click',function(){ov.remove();});
+    // Ник админа рядом с крестиком
+    if(s.adminNick){
+        var sdAdmin=document.createElement('span');
+        sdAdmin.style.cssText='display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;padding:2px 9px;margin-right:6px;white-space:nowrap;';
+        sdAdmin.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'+s.adminNick;
+        hdrTop.insertBefore(sdAdmin, hc);
+    }
     hdrTop.appendChild(ht); hdrTop.appendChild(hc);
     // Строка 2: кнопка "История пополнений" по центру
     var hdrBot=document.createElement('div');
@@ -1160,7 +1563,7 @@ function showShiftDetail(s){
     box.appendChild(grid);
     box.appendChild(grid2);
     var tw=document.createElement('div');
-    tw.style.cssText='overflow-y:auto;flex:1;min-height:0;padding:12px 20px;';
+    tw.style.cssText='overflow-y:auto;overscroll-behavior:contain;flex:1;min-height:0;padding:12px 20px;';
     var entries=s.manualEntries||[];
     if(entries.length){
         var lt=document.createElement('div');
@@ -1441,17 +1844,35 @@ function createBtn(){
     if(!erpBtn) return;
 
     // Сжимаем ERP-кнопку: узкая, та же высота
-    erpBtn.style.setProperty('flex', '0 0 62px', 'important');
-    erpBtn.style.setProperty('width', '62px', 'important');
+    erpBtn.style.setProperty('flex', '0 0 68px', 'important');
+    erpBtn.style.setProperty('width', '68px', 'important');
     erpBtn.style.setProperty('min-width', '0', 'important');
     erpBtn.style.setProperty('padding', '4px 6px', 'important');
     erpBtn.style.setProperty('font-size', '10px', 'important');
     erpBtn.style.setProperty('white-space', 'normal', 'important');
     erpBtn.style.setProperty('word-break', 'break-word', 'important');
     erpBtn.style.setProperty('text-align', 'center', 'important');
-    erpBtn.style.setProperty('line-height', '1.2', 'important');
+    erpBtn.style.setProperty('line-height', '1.3', 'important');
     erpBtn.style.setProperty('overflow', 'visible', 'important');
+    erpBtn.style.setProperty('display', 'flex', 'important');
+    erpBtn.style.setProperty('align-items', 'center', 'important');
+    erpBtn.style.setProperty('justify-content', 'center', 'important');
     erpBtn.removeAttribute('data-block');
+    // Mantine вкладывает текст в span — форсируем перенос через MutationObserver
+    (function(){
+        function forceWrap(){
+            erpBtn.querySelectorAll('span').forEach(function(sp){
+                sp.style.setProperty('white-space','normal','important');
+                sp.style.setProperty('text-align','center','important');
+                sp.style.setProperty('word-break','break-word','important');
+                sp.style.setProperty('line-height','1.25','important');
+                sp.style.setProperty('display','block','important');
+            });
+        }
+        forceWrap();
+        setTimeout(forceWrap, 300);
+        setTimeout(forceWrap, 1000);
+    })();
 
     // Обёртка — заменяет erpBtn визуально, но erpBtn остаётся в DOM
     // Оборачиваем erpBtn в flex-контейнер, добавляя нашу кнопку слева
@@ -1508,7 +1929,11 @@ function createBtn(){
     erpBtn.style.setProperty('height', '54px', 'important');
     erpBtn.style.setProperty('align-self', 'stretch', 'important');
     erpBtn.style.setProperty('box-sizing', 'border-box', 'important');
-    erpBtn.style.setProperty('font-size', '13px', 'important');
+    erpBtn.style.setProperty('font-size', '9.5px', 'important');
+    erpBtn.style.setProperty('line-height', '1.3', 'important');
+    erpBtn.style.setProperty('display', 'flex', 'important');
+    erpBtn.style.setProperty('align-items', 'center', 'important');
+    erpBtn.style.setProperty('justify-content', 'center', 'important');
 
     updateBtnBadge();
 }
